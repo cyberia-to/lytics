@@ -1,0 +1,27 @@
+# ---
+# tags: lytics, config
+# crystal-type: source
+# crystal-domain: cyber
+# ---
+[package]
+name = "lytics-event"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "lytics event core — canonical encoding, hemera hash, pow, keys, adr-036 signing"
+
+[dependencies]
+hemera.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+k256.workspace = true
+bip32.workspace = true
+bip39.workspace = true
+sha2.workspace = true
+ripemd.workspace = true
+bech32.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
