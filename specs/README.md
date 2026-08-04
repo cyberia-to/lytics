@@ -109,18 +109,24 @@ event {
   attention { ms, scroll_depth }    attention events: ms integer, scroll_depth percent 0-100
   props { key: value, ... }         typed custom properties
   revenue { amount, currency }      optional; amount integer, minor units
-  timestamp
-  pow { nonce, difficulty }
-  signature                          secp256k1 over the canonical encoding, ADR-036 shape
+  timestamp                          unix milliseconds
+  pow { nonce, difficulty }          difficulty: the solved target, a record
+  pubkey                             base64 SEC1-compressed secp256k1 (33 B)
+  signature                          base64 compact secp256k1 over the ADR-036 doc
 }
 ```
 
+the client signs the body — every field above pow. `pubkey` rides outside
+the body because the bech32 neuron is a hash of it and verification needs
+the preimage. server enrichment (source, channel, geo, device) is
+server-attested, derived at ingest, and never part of the signature.
+
 ### canonical encoding
 
-the signed bytes are the event as canonical JSON — sorted keys, no
+the signed bytes are the event body as canonical JSON — sorted keys, no
 whitespace, integers only — wrapped in the ADR-036 sign doc. the event
-hash is [[hemera]] over those bytes; it doubles as the particle hash and
-as the dedup key.
+hash is [[hemera]] over the body bytes; it doubles as the particle hash
+and as the dedup key.
 
 ### proof of work
 
@@ -219,12 +225,12 @@ visitor.
 lytics/
 ├── README.md      product page
 ├── specs/         this document — canonical
-├── core/          wasm tracker core (Rust)
-├── loader/        loader.js source + size gate
-├── ingest/        axum service embedding the cell
-├── report/        inf rules for the report set
-├── dash/          Leptos dashboard
-└── agent/         reference agent client
+└── rs/            cargo workspace
+    ├── event/     shared crypto spine — canonical encoding, hash, pow, keys, adr-036
+    ├── ingest/    axum service embedding the cell + reports + static dashboard
+    │   └── static/dash.html    the symbolic dashboard
+    ├── agent/     reference agent client + load generator
+    └── core/      wasm tracker core (phase: tracker) + loader.js
 ```
 
 ## implementation plan
