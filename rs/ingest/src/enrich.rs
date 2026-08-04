@@ -6,9 +6,12 @@
 //! server-side enrichment — UA parsing and referrer→source→channel.
 //!
 //! enrichment is server-attested, never visitor-signed. the referrer table
-//! is the v1 builtin set with assistant referrals as a first-class channel;
-//! the snowplow referer-db port replaces the table without changing the
-//! interface (spec: referrer→source engine).
+//! is the generated snowplow referer-db port (`referers.rs`), with assistant
+//! referrals kept as a first-class channel: the builtin AI table wins over
+//! the snowplow classification (spec: referrer→source engine).
+
+#[path = "referers.rs"]
+mod referers;
 
 use lytics_event::EventBody;
 use serde::{Deserialize, Serialize};
@@ -45,6 +48,8 @@ pub enum Channel {
     Search,
     Social,
     Ai,
+    Email,
+    Paid,
     Referral,
     Campaign,
 }
@@ -55,15 +60,8 @@ pub struct Attribution {
     pub channel: Channel,
 }
 
-const SEARCH: &[&str] = &[
-    "google.", "bing.com", "duckduckgo.com", "yandex.", "baidu.com", "search.brave.com",
-    "ecosia.org", "startpage.com",
-];
-const SOCIAL: &[&str] = &[
-    "twitter.com", "x.com", "t.co", "facebook.com", "instagram.com", "reddit.com",
-    "linkedin.com", "news.ycombinator.com", "t.me", "telegram.me", "youtube.com",
-    "tiktok.com", "mastodon.", "bsky.app", "warpcast.com", "farcaster.",
-];
+/// assistant referrals stay first-class: this table wins over the snowplow
+/// classification, so chatgpt.com is `Ai` even though snowplow knows it.
 const AI: &[&str] = &[
     "chatgpt.com", "chat.openai.com", "perplexity.ai", "claude.ai", "gemini.google.com",
     "copilot.microsoft.com", "you.com", "phind.com", "kagi.com", "poe.com", "grok.com",
@@ -88,6 +86,35 @@ fn hosts_match(host: &str, pattern: &str) -> bool {
     }
 }
 
+/// look up a referrer host in the snowplow table: exact domain match first,
+/// then walk up parent domains by stripping the leftmost label.
+fn referer_lookup(host: &str) -> Option<(&'static str, &'static str)> {
+    let mut candidate = host;
+    loop {
+        if let Ok(i) = referers::REFERERS.binary_search_by_key(&candidate, |&(d, _, _)| d) {
+            let (_, source, medium) = referers::REFERERS[i];
+            return Some((source, medium));
+        }
+        match candidate.split_once('.') {
+            Some((_, parent)) if parent.contains('.') => candidate = parent,
+            _ => return None,
+        }
+    }
+}
+
+/// snowplow medium → channel. `unknown` means "named source, medium unknown" —
+/// classified as referral but keeping the source name.
+fn medium_channel(medium: &str) -> Channel {
+    match medium {
+        "search" => Channel::Search,
+        "social" => Channel::Social,
+        "email" => Channel::Email,
+        "paid" => Channel::Paid,
+        "chatbot" => Channel::Ai,
+        _ => Channel::Referral,
+    }
+}
+
 /// attribute an event: utm wins, then referrer host, then direct/internal.
 pub fn attribute(body: &EventBody) -> Attribution {
     if let Some(utm) = &body.utm {
@@ -103,16 +130,16 @@ pub fn attribute(body: &EventBody) -> Attribution {
             Attribution { source: None, channel: Channel::Internal }
         }
         Some(host) => {
-            let channel = if AI.iter().any(|p| hosts_match(&host, p)) {
-                Channel::Ai
-            } else if SEARCH.iter().any(|p| hosts_match(&host, p)) {
-                Channel::Search
-            } else if SOCIAL.iter().any(|p| hosts_match(&host, p)) {
-                Channel::Social
-            } else {
-                Channel::Referral
-            };
-            Attribution { source: Some(host), channel }
+            if AI.iter().any(|p| hosts_match(&host, p)) {
+                return Attribution { source: Some(host), channel: Channel::Ai };
+            }
+            match referer_lookup(&host) {
+                Some((source, medium)) => Attribution {
+                    source: Some(source.to_string()),
+                    channel: medium_channel(medium),
+                },
+                None => Attribution { source: Some(host), channel: Channel::Referral },
+            }
         }
     }
 }
@@ -163,6 +190,20 @@ mod tests {
     fn own_host_is_internal_and_none_is_direct() {
         assert_eq!(attribute(&body(Some("https://cyber.page/other"), None)).channel, Channel::Internal);
         assert_eq!(attribute(&body(None, None)).channel, Channel::Direct);
+    }
+
+    #[test]
+    fn gmail_is_email_channel_with_source_name() {
+        let a = attribute(&body(Some("https://mail.google.com/mail/u/0"), None));
+        assert_eq!(a.channel, Channel::Email);
+        assert_eq!(a.source.as_deref(), Some("Gmail"));
+    }
+
+    #[test]
+    fn parent_domain_walk_resolves_subdomains() {
+        let a = attribute(&body(Some("https://l.facebook.com/l.php?u=x"), None));
+        assert_eq!(a.channel, Channel::Social);
+        assert_eq!(a.source.as_deref(), Some("Facebook"));
     }
 
     #[test]
