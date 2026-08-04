@@ -11,10 +11,12 @@ alias: cyber analytics, web analytics, lytics analytics
 
 > every visitor is a neuron
 
-web analytics built on [[soft3]] principles: the visitor owns a keypair, every
-event is a signed assertion, every signal costs a small proof of work, and the
-graph of visits becomes queryable knowledge — retention, cohorts and funnels
-included from day one.
+[[attention]] is the scarce quantity every site competes for, and analytics
+is the feedback loop that measures it: who attends, from where, to what, and
+whether they return. lytics measures exactly that loop — on [[soft3]]
+principles: the visitor owns a keypair, every event is a signed assertion,
+every signal costs a small proof of work, and the stream of attention becomes
+queryable knowledge — retention, cohorts and funnels included from day one.
 
 lytics is the first consumer application of the soft3 stack — and the neuron
 onramp for [[cyber]]: every visitor of every site running lytics carries a
@@ -40,12 +42,38 @@ change unlocks the entire premium tier — retention matrices, cohort analysis,
 multi-day funnels — as core features, and replaces blocklist bot-filtering
 with economics: every event carries a [[costly signal]].
 
+## what changed under analytics' feet
+
+plausible answered 2019, when cookies were the sin and GA the monopoly.
+2026 asks harder questions, and each one lands on a lytics primitive:
+
+- agents arrived. a growing share of traffic is AI agents reading pages on
+  a person's behalf. user-agent sniffing cannot separate them, and
+  blocklists punish the honest ones. lytics hands an agent the same
+  primitive a human gets — a [[neuron]]. declared agent attention becomes a
+  first-class, filterable audience; undeclared floods pay PoW for every
+  fake view.
+- attribution collapsed. referrers are stripped, links travel through
+  chats and AI assistants, and "direct" swallowed the truth. lytics
+  attaches attribution to signed arrival events, treats assistant
+  referrals as a channel of their own — and recognizes a returning neuron
+  with zero referrer information.
+- numbers demand proof. sponsors, advertisers and acquirers audit traffic
+  claims they cannot verify, and fraud lives in that gap. every lytics
+  count is backed by keys and work today, and by [[zheng]] proofs at the
+  endgame — traffic worth money because anyone can verify it.
+- consent fatigue won. banners trained the web to click reject. lytics
+  runs first-party and self-hosted, with identity the visitor owns,
+  exports and erases — the disclosure is one honest sentence.
+
 ## the identity model
 
 the browser holds a keypair. the visitor is a [[neuron]].
 
 1. first visit: the wasm core generates a seed, stores it in IndexedDB,
-   derives the neuron. zero interaction — the visitor sees nothing.
+   derives the neuron along the [[mudra]] bridge pipeline — BIP39 →
+   BIP32/44 → secp256k1 → bech32, neuron id = [[hemera]] of the pubkey.
+   zero interaction — the visitor sees nothing.
 2. every event is signed by the visitor key. an unsigned event is spam by
    definition.
 3. every event carries a proof of work over the event hash — target ~0.042 s
@@ -60,8 +88,10 @@ the browser holds a keypair. the visitor is a [[neuron]].
    the visitor makes, never a default.
 
 the same key that signs a pageview can later sign a [[cyberlink]]. a lytics
-neuron is a proto-neuron of the [[cybergraph]]: the event schema is shaped so
-that settlement into the cybergraph is a replay, never a migration.
+neuron is bridge-ready by construction: the mudra claim (`legacy address →
+native neuron`, ADR-036 signed) works on it unchanged, so every visitor of
+every lytics site holds a standing invitation into the [[cybergraph]] — and
+the event schema is shaped so settlement is a replay, never a migration.
 
 ### privacy stance, stated plainly
 
@@ -78,7 +108,7 @@ geo lookup and discarded, following the plausible standard.
 | retention | first-seen cohort × weekly return matrix over stable neurons |
 | cohorts | group by first-seen week, campaign, or landing page |
 | funnels | ordered event-sequence match per neuron, across days |
-| bot filtering | PoW + signature verification at ingest — economic, not curated |
+| bot filtering | PoW + signature verification at ingest — filtering by economics |
 | goals and revenue | named events with typed props, summed per cohort |
 | provable stats (endgame) | aggregates proven by [[zheng]] — "this page truly had N visitors" is a claim no other analytics can make |
 
@@ -135,7 +165,7 @@ event {
   revenue { amount, currency }      optional
   timestamp
   pow { nonce, difficulty }
-  signature                          ed25519 over the canonical encoding
+  signature                          secp256k1 over the canonical encoding, ADR-036 shape
 }
 ```
 
@@ -198,7 +228,7 @@ visitor.
 | referrer→source engine | plausible core (AGPL) + snowplow referer db | clean reimplementation in Rust; behavior parity, fresh code |
 | geo | `maxminddb` crate + GeoLite2 | same lookup plausible uses |
 | ua parsing | `uaparser`/`woothee` crate | device class, browser, os |
-| key mnemonics | [[mudra]] conventions | BIP39 seed → bech32 address, same path a neuron claim uses |
+| identity pipeline | [[mudra]] bridge (`mudra/specs/bridge.md`) | BIP39 → BIP32/44 → secp256k1 → bech32, neuron = Hemera(pubkey), ADR-036 signing — the existing bridge claim carries a lytics neuron into the native graph |
 | pow + hashing | [[hemera]] Poseidon2 | event hash and PoW share the stack's native hash — a lytics event hash is already a particle hash |
 
 ## what lytics rejects
@@ -224,7 +254,8 @@ estimates follow the dev model: pomodoro = 30 min, session = 3 h.
 ### phase 1 — identity + tracker (3 sessions)
 
 wasm core: keygen, IndexedDB seed storage, per-domain derivation, BIP39
-export/import, ed25519 signing, Poseidon2 PoW with adaptive difficulty,
+export/import, secp256k1 signing in ADR-036 shape, Poseidon2 PoW with
+adaptive difficulty,
 on-device attention integration (visibilitychange / focus / blur /
 pagehide + heartbeat), canonical event encoding, sendBeacon transport.
 loader.js: instant capture, SPA pushState hook, sensor hooks,
@@ -235,8 +266,9 @@ queue-until-ready. size gate in CI: core ≤64 KB gzip, loader ≤2 KB.
 axum service embedding a cybergraph cell: `POST /api/event` — verify
 signature, verify PoW, parse UA, geo lookup, referrer→source→channel
 attribution (Rust port of plausible behavior over the snowplow referer
-database), cast the event as a signed signal into the cell. difficulty
-oracle endpoint. deletion-by-neuron endpoint.
+database, with assistant referrals as a first-class channel), cast the
+event as a signed signal into the cell. difficulty oracle endpoint.
+deletion-by-neuron endpoint.
 
 ### phase 3 — queries: the full report set (4 sessions)
 
