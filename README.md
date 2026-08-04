@@ -103,13 +103,13 @@ visitor browser                     server                       reader
 | core | Rust → wasm, ≤64 KB gzip budget | keygen, per-domain derivation, ed25519 signing, PoW, beacon transport; loaded async so page performance never waits on crypto |
 | ingest | Rust, axum | signature + PoW verification, UA parsing, MaxMind geo, referrer→source attribution, adaptive difficulty, batched writes |
 | store | [[cybergraph]] cell + [[bbg]] | the ingest service embeds a cell in-process; events enter as signed signals, bbg holds the state and its time dimension indexes the stream |
-| query | [[inf]] datalog over bbg | timeseries, top-N, episodes, retention, funnels — each report is one inf rule; the path is live: cybergraph already runs inf over bbg state in-process |
+| query | [[inf]] datalog over bbg | timeseries, top-N, passages, retention, funnels — each report is one inf rule; the path is live: cybergraph already runs inf over bbg state in-process |
 | dashboard | Rust, Leptos + Trunk | wasm dashboard, d3 widgets, realtime by polling |
 
 the tracker splits in two on purpose: the loader guarantees plausible-grade
 capture latency and size; the wasm core carries the cryptography. events
-fired before the core loads are queued and signed retroactively in the same
-page session.
+fired before the core loads are queued and signed retroactively before they
+leave the page.
 
 the loader exists because the browser admits wasm only through JS: a wasm
 module is fetched and instantiated by `WebAssembly.instantiateStreaming` —
@@ -124,11 +124,13 @@ bootstrap the platform requires.
 ```text
 event {
   neuron         per-domain visitor neuron (bech32)
-  name           pageview | engagement | <custom>
+  kind           pageview | attention | <custom>
+  navigation     external | direct | internal       pageview: how the neuron arrived
   hostname, pathname
   referrer, source, channel, utm{source,medium,campaign,term,content}
   country, region, city             derived from ip, ip discarded
   browser, browser_version, os, os_version, device
+  attention { ms, scroll_depth }    attention events: measured on-device
   props { key: value, ... }         typed custom properties
   revenue { amount, currency }      optional
   timestamp
@@ -137,9 +139,53 @@ event {
 }
 ```
 
-sessions are computed at read time: a session is a gap-free run of events per
-neuron with idle timeout 30 min. storing sessions as derived data keeps
-ingest append-only — the same discipline the cybergraph demands.
+## the attention model
+
+lytics has no sessions. the 30-minute idle timeout that defines a "session"
+everywhere else is folklore inherited from 90s log analyzers — a guess about
+what silence means, standardized by google analytics and copied since,
+plausible included. silence in an event log is ambiguous: reading, parked
+tab, gone. lytics refuses to guess and measures instead.
+
+the tracker is a sensor. the browser emits the real boundaries —
+visibilitychange, focus, blur, pagehide — and the wasm core integrates
+attention on-device: time accumulates while the page is visible and the
+neuron is active, and ships as signed attention events (on hide, on leave,
+on a heartbeat that bounds loss). what other tools infer from timestamp
+gaps, lytics receives as measurement.
+
+grouping falls out of observables, never out of a clock constant:
+
+- arrival — a pageview whose navigation is external: outside referrer,
+  utm-tagged, or direct entry. attribution attaches to the arrival event
+  itself; entry page is the arrival's page.
+- passage — the run of a neuron's events from one arrival to the next (or
+  to the end of the stream). exit page is the passage's last page. every
+  question classically asked of a "session" — pages per visit, entry, exit,
+  source — is asked of a passage, and a passage is bounded by what the
+  neuron did, never by how long they paused.
+- window — when a question needs a time span (funnels, retention,
+  timeseries), the span is an explicit query parameter: hour, day, week,
+  between arrivals. the analyst states the window; the engine never invents
+  one.
+
+metrics follow the model:
+
+| classic | lytics |
+|---|---|
+| session duration — inferred from gaps, last page counts as zero | attention time — integrated visible-and-active ms, measured on-device |
+| bounce rate | attention per arrival + return probability within a stated window |
+| sessions count | arrivals, broken down by source |
+| pages per session | pages per passage |
+
+arrivals, passages and windows are read-time projections over the
+append-only event stream — ingest stays pure append, the discipline the
+cybergraph demands.
+
+one honest convention survives: heartbeat cadence and activity sampling are
+measurement granularity — they bound how much attention a killed tab can
+lose. they are tuning knobs of the instrument, never semantics of the
+visitor.
 
 ## reuse map
 
@@ -160,6 +206,10 @@ ingest append-only — the same discipline the cybergraph demands.
 - the daily salt. anonymity through amnesia trades the entire retention tier
   for a privacy property the visitor never controls. sovereign keys give the
   visitor stronger control and keep the data model whole.
+- the session. a 30-minute idle timeout is a guess about silence dressed
+  as a standard, and every metric built on it — bounce rate, session
+  duration, exit page — inherits the guess. lytics measures attention and
+  segments by arrivals; no clock constant defines the visitor.
 - clickhouse. the store is the cybergraph itself: bbg state inside an
   embedded cell, read by inf. the target scale (cyber.page and peer sites)
   fits; a columnar engine stays a swap-in behind the query layer if a site
@@ -175,9 +225,10 @@ estimates follow the dev model: pomodoro = 30 min, session = 3 h.
 
 wasm core: keygen, IndexedDB seed storage, per-domain derivation, BIP39
 export/import, ed25519 signing, Poseidon2 PoW with adaptive difficulty,
-canonical event encoding, sendBeacon transport. loader.js: instant capture,
-SPA pushState hook, queue-until-ready. size gate in CI: core ≤64 KB gzip,
-loader ≤2 KB.
+on-device attention integration (visibilitychange / focus / blur /
+pagehide + heartbeat), canonical event encoding, sendBeacon transport.
+loader.js: instant capture, SPA pushState hook, sensor hooks,
+queue-until-ready. size gate in CI: core ≤64 KB gzip, loader ≤2 KB.
 
 ### phase 2 — ingest (3 sessions)
 
@@ -189,18 +240,19 @@ oracle endpoint. deletion-by-neuron endpoint.
 
 ### phase 3 — queries: the full report set (4 sessions)
 
-inf rules for: visitors/pageviews timeseries, top pages, sources,
+inf rules for: neurons/pageviews/attention timeseries, top pages, sources,
 countries, devices, goals, custom props — and the identity-powered tier:
-retention matrix, cohorts, funnels. episode segmentation at read time.
-where the report set needs primitives inf lacks today (count, group-by
-time bucket, top-N, ordered sequence match), extend inf itself, with
-behavior checked against the cozo reference. this phase lands the features
-plausible paywalls, because here they are one rule each.
+retention matrix, cohorts, funnels. arrival and passage segmentation at
+read time. where the report set needs primitives inf lacks today (count,
+group-by time bucket, top-N, ordered sequence match), extend inf itself,
+with behavior checked against the cozo reference. this phase lands the
+features plausible paywalls, because here they are one rule each.
 
 ### phase 4 — dashboard (3 sessions)
 
 Leptos app from the cyberstates skeleton: period picker, comparison,
-realtime, the six classic widgets plus retention grid and funnel view.
+realtime, the classic widgets (neurons, pages, sources, geo, devices,
+goals) recast on attention metrics, plus retention grid and funnel view.
 public dashboard links.
 
 ### phase 5 — integration + verification (1 session)
