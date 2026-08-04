@@ -67,7 +67,11 @@ mnemonic ──BIP-39──▶ seed ──BIP-32/44──▶ secp256k1 key (per-
 per-domain derivation folds the domain into the BIP44 account level:
 `account' = u31(Hemera(domain))`, path `m/44'/118'/account'/0/0` — one
 seed, one hardened child per domain, so two sites observe two unlinkable
-neurons. the wire hrp defaults to `lytics` and is a deployment setting.
+neurons. `domain` is the registrable domain (eTLD+1 per the public suffix
+list), so one site's subdomains see one neuron. u31 truncation admits a
+rare collision — two domains, one child key — with probability ~n²/2³²
+over a visitor's n sites; accepted for v1. the wire hrp defaults to
+`lytics` and is a deployment setting.
 events are signed in ADR-036 shape, and the claim is key-level (any
 secp256k1 key qualifies, path plays no part), so the existing mudra claim
 (`legacy address → native neuron`) carries any lytics neuron into the
@@ -86,9 +90,9 @@ event {
   referrer, source, channel, utm{source,medium,campaign,term,content}
   country, region, city             derived from ip, ip discarded
   browser, browser_version, os, os_version, device
-  attention { ms, scroll_depth }    attention events: measured on-device
+  attention { ms, scroll_depth }    attention events: ms integer, scroll_depth percent 0-100
   props { key: value, ... }         typed custom properties
-  revenue { amount, currency }      optional
+  revenue { amount, currency }      optional; amount integer, minor units
   timestamp
   pow { nonce, difficulty }
   signature                          secp256k1 over the canonical encoding, ADR-036 shape
@@ -105,11 +109,27 @@ as the dedup key.
 ### proof of work
 
 the PoW predicate is one hash: find `nonce` such that
-`Hemera(event_hash ‖ nonce) < target`. the per-site `target` comes from
-the difficulty oracle (`GET /api/difficulty`), tuned so a median phone
-spends ~0.042 s; verification is a single hash. ingest rejects events
-whose timestamp falls outside a ±5 min window and events whose hash was
-already seen — a replayed signature buys nothing.
+`Hemera(event_hash ‖ nonce) < target`. verification is a single hash
+against the server's current target — the client-reported
+`pow.difficulty` is a record, never an input to acceptance. targets come
+from the difficulty oracle (`GET /api/difficulty`), tuned so a median
+phone spends ~0.042 s per event.
+
+two targets, one knob: an unseen neuron's first event must meet the
+enrollment target — default 100× the event target, ~4 s of background
+work — so identity itself is minted with work. a neuron farm pays two
+orders of magnitude more than a visitor, while a real first visit absorbs
+the cost invisibly behind reading. PoW prices signals; it never
+authenticates humanity — that honesty stands.
+
+### replay and time
+
+events are content-addressed: the event hash is the particle hash, so a
+replayed event is the same particle and appending it again is a no-op —
+idempotency is the dedup. timestamps bound skew, never history: events
+from the future (> +5 min) are rejected; stale events are accepted up to
+a deployment horizon (default 24 h) so offline queues survive flaky
+networks.
 
 ### erasure
 
@@ -118,6 +138,8 @@ are encrypted at rest with a per-neuron data key held by the site;
 `DELETE /api/neuron` destroys the key. the graph keeps its hashes, the
 data becomes unreadable, already-published aggregates stay — the standard
 crypto-shredding resolution of append-only against the right to erase.
+erasure erases the past and forbids nothing forward: the neuron's next
+event simply enrolls a fresh data key.
 
 ## the attention model
 
@@ -131,7 +153,10 @@ gaps, lytics receives as measurement.
 agent attention arrives by declaration: an agent has no visibility or
 focus to sense, so it states what it read in signed events with
 `actor: agent`. sensed human attention and declared agent attention are
-distinct streams; every report keeps them separable.
+distinct streams; every report keeps them separable. the declaration is a
+claim bound to the key: standing accrues to the neuron, names are labels.
+binding `operator` to an external identity (an operator-signed delegation)
+is deferred past v1.
 
 grouping falls out of observables, never out of a clock constant:
 
@@ -172,6 +197,20 @@ visitor.
 | identity pipeline | [[mudra]] bridge (`mudra/specs/bridge.md`) | BIP39 → BIP32/44 → secp256k1 → bech32, neuron = Hemera(pubkey), ADR-036 signing — the existing bridge claim carries a lytics neuron into the native graph |
 | pow + hashing | [[hemera]] Poseidon2 | event hash and PoW share the stack's native hash — a lytics event hash is already a particle hash |
 
+## repo layout
+
+```text
+lytics/
+├── README.md      product page
+├── specs/         this document — canonical
+├── core/          wasm tracker core (Rust)
+├── loader/        loader.js source + size gate
+├── ingest/        axum service embedding the cell
+├── report/        inf rules for the report set
+├── dash/          Leptos dashboard
+└── agent/         reference agent client
+```
+
 ## implementation plan
 
 estimates follow the dev model: pomodoro = 30 min, session = 3 h.
@@ -192,7 +231,10 @@ signature, verify PoW, parse UA, geo lookup, referrer→source→channel
 attribution (Rust port of plausible behavior over the snowplow referer
 database, with assistant referrals as a first-class channel), cast the
 event as a signed signal into the cell. difficulty oracle endpoint.
-erasure endpoint (per-neuron data-key destruction).
+erasure endpoint (per-neuron data-key destruction). `agent/`: a reference
+Rust client (canonical encoding + PoW + ADR-036) proving the API needs no
+browser. acceptance gate: sustain 100 events/s on one core with the cell
+embedded.
 
 ### phase 3 — queries: the full report set (4 sessions)
 
@@ -242,6 +284,9 @@ curl -s https://lytics.local/api/event -d @signed-event.json   # → 202
 # forged signature and weak pow are rejected
 curl -s https://lytics.local/api/event -d @forged.json          # → 401
 curl -s https://lytics.local/api/event -d @weak-pow.json        # → 429
+
+# a replayed event is idempotent
+curl -s https://lytics.local/api/event -d @signed-event.json   # → 202 again, counts unchanged
 
 # the premium tier answers
 echo '?[cohort, week, retained] := ...' | curl -s -d @- https://lytics.local/api/query
