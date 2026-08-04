@@ -48,7 +48,7 @@ the browser holds a keypair. the address is the visitor.
    derives an address. zero interaction — the visitor sees nothing.
 2. every event is signed by the visitor key. an unsigned event is spam by
    definition.
-3. every event carries a proof of work over the event hash — target ~0.1 s
+3. every event carries a proof of work over the event hash — target ~0.042 s
    on a median phone, verified server-side in microseconds. bots pay for
    every fake pageview with real compute. difficulty adapts per site.
 4. the seed exports as a BIP39 mnemonic. the visitor can import it in
@@ -109,6 +109,14 @@ the tracker splits in two on purpose: the loader guarantees plausible-grade
 capture latency and size; the wasm core carries the cryptography. events
 fired before the core loads are queued and signed retroactively in the same
 page session.
+
+the loader exists because the browser admits wasm only through JS: a wasm
+module is fetched and instantiated by `WebAssembly.instantiateStreaming` —
+a JS API — and every DOM, storage and network touch (pushState hooks,
+IndexedDB, sendBeacon) crosses a JS import boundary. wasm-bindgen emits this
+glue anyway; the loader is that glue plus the instant-capture queue, held to
+a 2 KB budget. the crypto and all logic stay in Rust — JS is confined to the
+bootstrap the platform requires.
 
 ## event schema
 
