@@ -71,6 +71,8 @@ neuron into the native graph unchanged.
 ```text
 event {
   neuron         per-domain visitor neuron (bech32)
+  actor          human | agent                      agent: self-declared machine reader
+  agent { name, operator }          optional, declared agents only
   kind           pageview | attention | <custom>
   navigation     external | direct | internal       pageview: how the neuron arrived
   hostname, pathname
@@ -94,6 +96,11 @@ attention on-device: time accumulates while the page is visible and the
 neuron is active, and ships as signed attention events (on hide, on leave,
 on a heartbeat that bounds loss). what other tools infer from timestamp
 gaps, lytics receives as measurement.
+
+agent attention arrives by declaration: an agent has no visibility or
+focus to sense, so it states what it read in signed events with
+`actor: agent`. sensed human attention and declared agent attention are
+distinct streams; every report keeps them separable.
 
 grouping falls out of observables, never out of a clock constant:
 
