@@ -3,11 +3,17 @@
 // crystal-type: source
 // crystal-domain: cyber
 // ---
-//! identity pipeline — BIP39 → BIP32 `m/0'/0'/account'/0/0` → secp256k1.
+//! identity pipeline — 32-byte entropy → BIP32 `m/0'/0'/account'/0/0` → secp256k1.
 //!
 //! zero-based path: cyber starts its registries at zero. the account level
 //! carries the domain (`account' = u31(Hemera(domain))`) because hardening
 //! is the unlinkability. spec: lytics/specs/README.md, identity pipeline.
+//!
+//! the secret is 32 bytes of entropy fed straight to BIP32 — no BIP39
+//! PBKDF2 stretch on the signing path, so the 2048-word list never enters
+//! the tracker wasm. the mnemonic is a display/backup encoding of that
+//! entropy, behind the `mnemonic` feature, loaded lazily only for
+//! import/export. spec: identity pipeline.
 
 use bip32::{DerivationPath, XPrv};
 use ripemd::Ripemd160;
@@ -19,11 +25,14 @@ pub enum KeyError {
     Mnemonic(String),
     #[error("derivation: {0}")]
     Derivation(String),
+    #[error("entropy: {0}")]
+    Entropy(String),
 }
 
-/// a master seed — the visitor's root identity across all domains.
+/// a master seed — the visitor's root identity across all domains: 32 bytes
+/// of entropy, fed directly to BIP32.
 pub struct Seed {
-    bytes: [u8; 64],
+    entropy: [u8; 32],
 }
 
 impl std::fmt::Debug for Seed {
@@ -58,23 +67,42 @@ pub fn domain_account(domain: &str) -> u32 {
 }
 
 impl Seed {
-    /// generate from OS entropy: a fresh 24-word identity.
-    pub fn generate() -> (Self, String) {
-        let mnemonic = bip39::Mnemonic::generate_in(bip39::Language::English, 24)
-            .expect("entropy");
-        let seed = Self::from_mnemonic_struct(&mnemonic);
-        (seed, mnemonic.to_string())
+    /// a fresh identity from OS entropy — no wordlist, no PBKDF2.
+    pub fn generate() -> Self {
+        let mut entropy = [0u8; 32];
+        getrandom::getrandom(&mut entropy).expect("os entropy");
+        Self { entropy }
     }
 
-    /// import an existing mnemonic.
+    /// adopt existing 32-byte entropy (e.g. a decoded backup).
+    pub fn from_entropy(entropy: [u8; 32]) -> Self {
+        Self { entropy }
+    }
+
+    /// the raw entropy — the value a backup encodes.
+    pub fn entropy(&self) -> [u8; 32] {
+        self.entropy
+    }
+
+    /// import a BIP39 mnemonic as entropy. behind `mnemonic` — the wordlist
+    /// is only linked where import/export actually happens.
+    #[cfg(feature = "mnemonic")]
     pub fn from_mnemonic(phrase: &str) -> Result<Self, KeyError> {
         let mnemonic = bip39::Mnemonic::parse_in_normalized(bip39::Language::English, phrase)
             .map_err(|e| KeyError::Mnemonic(e.to_string()))?;
-        Ok(Self::from_mnemonic_struct(&mnemonic))
+        let (entropy, len) = mnemonic.to_entropy_array();
+        if len != 32 {
+            return Err(KeyError::Entropy(format!("expected 24 words (32 B), got {len} B")));
+        }
+        let mut e = [0u8; 32];
+        e.copy_from_slice(&entropy[..32]);
+        Ok(Self { entropy: e })
     }
 
-    fn from_mnemonic_struct(mnemonic: &bip39::Mnemonic) -> Self {
-        Self { bytes: mnemonic.to_seed("") }
+    /// encode the entropy as a 24-word backup phrase. behind `mnemonic`.
+    #[cfg(feature = "mnemonic")]
+    pub fn to_mnemonic(&self) -> String {
+        bip39::Mnemonic::from_entropy(&self.entropy).expect("32 B entropy").to_string()
     }
 
     /// derive the neuron a given domain observes.
@@ -83,7 +111,7 @@ impl Seed {
         let path: DerivationPath = format!("m/0'/0'/{account}'/0/0")
             .parse()
             .map_err(|e: bip32::Error| KeyError::Derivation(e.to_string()))?;
-        let xprv = XPrv::derive_from_path(self.bytes, &path)
+        let xprv = XPrv::derive_from_path(self.entropy, &path)
             .map_err(|e| KeyError::Derivation(e.to_string()))?;
         let signing = k256::ecdsa::SigningKey::from(xprv.private_key().clone());
         Ok(Neuron::from_signing(signing, hrp))
@@ -143,11 +171,30 @@ mod tests {
     }
 
     #[test]
-    fn generated_mnemonic_roundtrips() {
-        let (seed, phrase) = Seed::generate();
+    fn generated_entropy_roundtrips_through_mnemonic() {
+        let seed = Seed::generate();
+        let phrase = seed.to_mnemonic();
+        assert_eq!(phrase.split_whitespace().count(), 24);
         let restored = Seed::from_mnemonic(&phrase).unwrap();
+        assert_eq!(seed.entropy(), restored.entropy());
         let a = seed.neuron("example.com", "lytics").unwrap();
         let b = restored.neuron("example.com", "lytics").unwrap();
+        assert_eq!(a.bech32, b.bech32);
+    }
+
+    #[test]
+    fn mnemonic_encoding_matches_the_standard() {
+        // 32 zero bytes → the canonical all-zeros BIP39 phrase; the browser's
+        // words.js must produce the identical string for export/import parity.
+        let seed = Seed::from_entropy([0u8; 32]);
+        assert_eq!(seed.to_mnemonic(), PHRASE);
+    }
+
+    #[test]
+    fn entropy_is_the_seed() {
+        let e = [7u8; 32];
+        let a = Seed::from_entropy(e).neuron("example.com", "lytics").unwrap();
+        let b = Seed::from_entropy(e).neuron("example.com", "lytics").unwrap();
         assert_eq!(a.bech32, b.bech32);
     }
 

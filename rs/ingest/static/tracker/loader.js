@@ -8,7 +8,7 @@
 // (keys, signing, pow) lives in the wasm core; this file only observes and
 // ships. spec: lytics/specs/README.md, the attention model.
 
-import init, { Tracker, generate_mnemonic } from "./lytics_core.js";
+import init, { Tracker, generate_entropy } from "./lytics_core.js";
 
 const script = document.currentScript;
 const ENDPOINT = (script?.dataset.endpoint || "").replace(/\/$/, "");
@@ -17,23 +17,33 @@ const HRP = script?.dataset.hrp || "lytics";
 const HEARTBEAT_MS = 15000; // instrument granularity — bounds attention lost to a killed tab
 const IDLE_MS = 5000; // input silence pauses the attention clock
 
-const KEY = `lytics:seed:${DOMAIN}`;
+const KEY = `lytics:entropy:${DOMAIN}`;
 let tracker, eventTarget, enrollTarget, ready;
 const queue = []; // events captured before the core is live
 
-// ── identity: the seed lives in localStorage, exportable, per-domain ────────
-function loadOrCreateMnemonic() {
-  let m = localStorage.getItem(KEY);
-  if (!m) {
-    m = generate_mnemonic();
-    localStorage.setItem(KEY, m);
+// ── identity: 32-byte entropy lives in localStorage, per-domain ─────────────
+function loadOrCreateEntropy() {
+  let e = localStorage.getItem(KEY);
+  if (!e) {
+    e = generate_entropy(); // hex, no wordlist touched
+    localStorage.setItem(KEY, e);
   }
-  return m;
+  return e;
 }
-// exposed so a site can offer export/import/erase
+// export/import as a human-readable 24-word backup loads the wordlist lazily
+// — a rare, deliberate action, never on the signing path. `words.js` wraps
+// @scure/bip39 (entropy <-> phrase); shipped separately, imported on demand.
 window.lytics = window.lytics || {};
-window.lytics.exportSeed = () => localStorage.getItem(KEY);
-window.lytics.importSeed = (m) => { localStorage.setItem(KEY, m); location.reload(); };
+window.lytics.exportEntropy = () => localStorage.getItem(KEY);
+window.lytics.exportPhrase = async () => {
+  const { entropyToPhrase } = await import("./words.js");
+  return entropyToPhrase(localStorage.getItem(KEY));
+};
+window.lytics.importPhrase = async (phrase) => {
+  const { phraseToEntropy } = await import("./words.js");
+  localStorage.setItem(KEY, phraseToEntropy(phrase));
+  location.reload();
+};
 window.lytics.forget = () => { localStorage.removeItem(KEY); };
 
 // ── transport ───────────────────────────────────────────────────────────────
@@ -147,7 +157,7 @@ pageview();
 hookHistory();
 (async () => {
   await init();
-  tracker = new Tracker(loadOrCreateMnemonic(), DOMAIN, HRP);
+  tracker = new Tracker(loadOrCreateEntropy(), DOMAIN, HRP);
   enrolled = await difficulty();
   ready = true;
   window.lytics.neuron = tracker.neuron;

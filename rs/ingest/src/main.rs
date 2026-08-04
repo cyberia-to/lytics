@@ -341,7 +341,7 @@ async fn tracker_asset(Path(name): Path<String>) -> impl IntoResponse {
     if name == "loader.js" {
         return (headers("text/javascript"), include_str!("../static/tracker/loader.js")).into_response();
     }
-    if name == "lytics_core.js" || name == "lytics_core_bg.wasm" {
+    if name == "lytics_core.js" || name == "lytics_core_bg.wasm" || name == "words.js" {
         let dir = std::env::var("LYTICS_STATIC")
             .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/static/tracker").into());
         match std::fs::read(format!("{dir}/{name}")) {

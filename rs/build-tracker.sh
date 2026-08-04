@@ -20,7 +20,7 @@ RUSTC="$TC/bin/rustc" ~/.cargo/bin/cargo +stable build \
   --out-dir "$OUT" target/wasm32-unknown-unknown/release/lytics_core.wasm
 
 if command -v wasm-opt >/dev/null 2>&1; then
-  wasm-opt -Oz "$OUT/lytics_core_bg.wasm" -o "$OUT/lytics_core_bg.wasm"
+  wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int "$OUT/lytics_core_bg.wasm" -o "$OUT/lytics_core_bg.wasm"
 fi
 
 echo "tracker built:"

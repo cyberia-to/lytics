@@ -21,8 +21,8 @@ pub fn start() {
     console_error_panic_hook::set_once();
 }
 
-/// a per-domain tracker bound to one neuron. constructed from a mnemonic
-/// (persisted by the loader in IndexedDB) plus the site domain.
+/// a per-domain tracker bound to one neuron. constructed from stored
+/// entropy (hex, persisted by the loader) plus the site domain.
 #[wasm_bindgen]
 pub struct Tracker {
     seed: Seed,
@@ -32,19 +32,23 @@ pub struct Tracker {
     pubkey_b64: String,
 }
 
-/// generate a fresh identity — returns the 24-word mnemonic for the loader
-/// to store. the seed never leaves the browser.
+/// generate a fresh identity — returns 32 bytes of entropy as hex for the
+/// loader to store. no wordlist is touched: the human-readable 24-word
+/// backup is derived lazily by the export module only when the visitor asks.
+/// the secret never leaves the browser.
 #[wasm_bindgen]
-pub fn generate_mnemonic() -> String {
-    Seed::generate().1
+pub fn generate_entropy() -> String {
+    hex::encode(Seed::generate().entropy())
 }
 
 #[wasm_bindgen]
 impl Tracker {
-    /// bind an imported mnemonic to a domain.
+    /// bind stored entropy (32-byte hex) to a domain.
     #[wasm_bindgen(constructor)]
-    pub fn new(mnemonic: &str, domain: &str, hrp: &str) -> Result<Tracker, String> {
-        let seed = Seed::from_mnemonic(mnemonic).map_err(|e| e.to_string())?;
+    pub fn new(entropy_hex: &str, domain: &str, hrp: &str) -> Result<Tracker, String> {
+        let bytes = hex::decode(entropy_hex).map_err(|e| e.to_string())?;
+        let entropy: [u8; 32] = bytes.as_slice().try_into().map_err(|_| "entropy must be 32 bytes")?;
+        let seed = Seed::from_entropy(entropy);
         let neuron = seed.neuron(domain, hrp).map_err(|e| e.to_string())?;
         Ok(Tracker {
             bech32: neuron.bech32.clone(),
@@ -148,11 +152,11 @@ fn base64_std(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    const ENTROPY: &str = "0000000000000000000000000000000000000000000000000000000000000007";
 
     #[test]
     fn builds_a_verifiable_event() {
-        let t = Tracker::new(PHRASE, "cyber.page", "lytics").unwrap();
+        let t = Tracker::new(ENTROPY, "cyber.page", "lytics").unwrap();
         let spec = r#"{"kind":"pageview","pathname":"/","navigation":"external","timestamp":1}"#;
         let json = t.build_event(spec, lytics_event::target_from_difficulty(8)).unwrap();
         let event: Event = serde_json::from_str(&json).unwrap();
@@ -164,11 +168,11 @@ mod tests {
 
     #[test]
     fn generate_is_importable() {
-        let m = generate_mnemonic();
-        assert_eq!(m.split_whitespace().count(), 24);
-        // deriving twice from the same generated phrase agrees
-        let a = Tracker::new(&m, "x.com", "lytics").unwrap();
-        let b = Tracker::new(&m, "x.com", "lytics").unwrap();
+        let e = generate_entropy();
+        assert_eq!(e.len(), 64); // 32 bytes hex
+        // deriving twice from the same entropy agrees
+        let a = Tracker::new(&e, "x.com", "lytics").unwrap();
+        let b = Tracker::new(&e, "x.com", "lytics").unwrap();
         assert_eq!(a.neuron(), b.neuron());
     }
 }

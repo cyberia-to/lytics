@@ -29,7 +29,7 @@ visitor browser                     server                       reader
 | component | language | role |
 |---|---|---|
 | loader | JS module, ~2 KB source | fires on page load, captures pageview + SPA route changes instantly, runs the attention sensor, queues events until the core is ready |
-| core | Rust → wasm, ~172 KB gzip measured | keygen, per-domain derivation, secp256k1 signing, PoW; loaded async so page performance never waits on crypto |
+| core | Rust → wasm, ~92 KB gzip / ~77 KB brotli measured | keygen, per-domain derivation, secp256k1 signing, PoW; loaded async so page performance never waits on crypto |
 | ingest | Rust, axum | signature + PoW verification, replay dedup, UA parsing, MaxMind geo (ip read, used, discarded), referrer→source attribution, adaptive difficulty, signal casting into the cell |
 | store | [[cybergraph]] cell + [[bbg]] | the ingest service embeds a cell in-process; events enter as signed signals, bbg holds the state and its time dimension indexes the stream |
 | query | [[inf]] datalog over bbg | timeseries, top-N, passages, retention, funnels — each report is one inf rule; the path is live: cybergraph already runs inf over bbg state in-process |
@@ -48,30 +48,52 @@ stay in Rust — JS is confined to the bootstrap the platform requires and the
 sensor the platform exposes.
 
 on core size: the original ≤64 KB budget did not survive contact with the
-primitives. secp256k1 (k256), BIP32/39 with the 2048-word list, and
-Poseidon2 (hemera) sum to ~172 KB gzip under `opt-level="z"` + LTO — the
-honest floor for sovereign keys plus a native-hash PoW. it loads async and
-gates nothing: the loader captures the first pageview and the whole
-attention stream before the core finishes compiling, then signs the queue
-retroactively. paths to shrink it (a leaner field build, a hand-rolled
-secp256k1, dropping the English wordlist for raw-entropy import) are real
-but deferred — correctness and the honest number first.
+primitives, but three cuts brought the core from ~172 KB to ~92 KB gzip
+(~77 KB brotli): the 2048-word list left the hot path (the secret is 32
+bytes of entropy fed straight to BIP32 — the BIP39 mnemonic is a lazy
+backup encoding in `words.js`, loaded only on export/import); k256 and
+bip32 were trimmed to sign-and-derive only (no pkcs8/pem/serde/schnorr/ecdh,
+no bs58, no precomputed tables); and `wasm-opt -Oz` ran over the result.
+what remains is the honest floor: secp256k1 signing (k256) plus Poseidon2
+(hemera) for the event hash and PoW. it loads async and gates nothing — the
+loader captures the first pageview and the whole attention stream before the
+core compiles, then signs the queue retroactively. the deepest remaining
+lever is a hand-rolled minimal secp256k1 (k256 is the largest piece), or
+moving signing to `@noble/secp256k1` in JS (~4 KB, same curve) — deferred;
+the curve stays secp256k1 either way so the mudra bridge and on-chain
+identity hold.
+
+first-load transfer, measured: ~98 KB gzip / ~83 KB brotli total (wasm +
+wasm-bindgen glue + loader), one time, then served from cache. the loader
+is a JS module; `words.js` (~6 KB brotli, the wordlist) transfers only when
+a visitor exports or imports their identity.
 
 `/api/query` is owner-authenticated; public dashboards expose named,
 parameterized reports only — raw datalog never faces the open internet.
 
 ## identity pipeline
 
-keys follow the [[mudra]] bridge (`mudra/specs/bridge.md`) exactly:
+keys follow the [[mudra]] bridge (`mudra/specs/bridge.md`), with the seed
+taken as raw entropy so the wordlist stays off the signing path:
 
 ```text
-mnemonic ──BIP-39──▶ seed ──BIP-32──▶ secp256k1 key (per-domain child)
-                                              │
-                     compressed pubkey (33 B) ◀┘
-                              │
-        bech32(hrp, ripemd160(sha256(pubkey)))  = neuron (wire form)
-        Hemera(compressed_pubkey)               = native neuron id (32 B)
+32-byte entropy ──BIP-32──▶ secp256k1 key (per-domain child)
+                                    │
+           compressed pubkey (33 B) ◀┘
+                    │
+  bech32(hrp, ripemd160(sha256(pubkey)))  = neuron (wire form)
+  Hemera(compressed_pubkey)               = native neuron id (32 B)
+
+  entropy ◀──BIP-39 (lazy, words.js)──▶ 24-word backup   (import/export only)
 ```
+
+the 32-byte entropy is the secret; it feeds BIP32 directly, skipping the
+BIP39 PBKDF2 stretch. the mnemonic is a display encoding of that entropy —
+standard BIP39 word/checksum, so it round-trips with any BIP39 tool at the
+entropy level — computed by `words.js` only when the visitor backs up or
+imports. (skipping PBKDF2 means a standard wallet importing the phrase
+derives a different *seed*; the claim path is key-level via mudra, and the
+lytics import reconstructs the exact entropy.)
 
 per-domain derivation folds the domain into the account level:
 `account' = u31(Hemera(domain))`, path `m/0'/0'/account'/0/0` — one
