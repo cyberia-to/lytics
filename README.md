@@ -132,8 +132,7 @@ geo lookup and discarded, following the plausible standard.
 | retention | first-seen cohort × weekly return matrix over stable neurons |
 | cohorts | group by first-seen week, campaign, or landing page |
 | funnels | ordered event-sequence match per neuron, across days |
-| agent audience | declared agent neurons, separable in every report — human and machine attention never blur |
-| bot filtering | PoW + signature verification at ingest — filtering by economics |
+| agent audience | declared agent neurons, separable in every report — human and machine attention never blur; undeclared floods simply pay PoW |
 | goals and revenue | named events with typed props, summed per cohort |
 | provable stats (endgame) | aggregates proven by [[zheng]] — "this page truly had N visitors" is a claim no other analytics can make |
 
