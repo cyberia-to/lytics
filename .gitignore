@@ -1,1 +1,5 @@
 data/
+target/
+rs/target/
+rs/ingest/static/tracker/lytics_core.js
+rs/ingest/static/tracker/lytics_core_bg.wasm
