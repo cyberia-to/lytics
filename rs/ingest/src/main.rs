@@ -45,6 +45,22 @@ struct App {
     chains: graph::Chains,
     events: Vec<Stored>,
     seen: BTreeSet<[u8; 32]>,
+    /// events accepted but not yet cast into the cell. bbg recommits its
+    /// polynomial root on every insert (O(state) per event), so casting is
+    /// deferred to the query path — the reader pays for materialization,
+    /// the ingest hot path stays at log+index speed. upstream fix: a lazy
+    /// root in bbg would let casting return to the hot path.
+    pending: Vec<(graph::NeuronId, graph::Particle, graph::Particle, u64)>,
+}
+
+/// materialize pending events into the cell — called before inf queries.
+fn settle(app: &mut App) {
+    let pending = std::mem::take(&mut app.pending);
+    for (native, hash, page, ts_secs) in pending {
+        if let Err(e) = app.chains.cast(&mut app.cell, native, hash, page, ts_secs) {
+            eprintln!("cell cast failed: {e}");
+        }
+    }
 }
 
 type Shared = Arc<Mutex<App>>;
@@ -134,12 +150,7 @@ fn ingest(app: &mut App, event: Event, ua: Option<&str>) -> Result<(&'static str
         .map_err(|e| Reject::Bad(e.to_string()))?;
 
     let page = graph::page_particle(&event.body.hostname, &event.body.pathname);
-    if let Err(e) =
-        app.chains.cast(&mut app.cell, native, hash, page, event.body.timestamp / 1000)
-    {
-        // the log already holds the event; a cell rejection is an engine bug
-        eprintln!("cell cast failed for {hash_hex}: {e}");
-    }
+    app.pending.push((native, hash, page, event.body.timestamp / 1000));
 
     app.seen.insert(hash);
     app.events.push(stored);
@@ -170,7 +181,7 @@ fn replay(app: &mut App) {
         // chain id (the pubkey lives only in the wire event)
         let native = *hemera::hash(stored.body.neuron.as_bytes()).as_bytes();
         let page = graph::page_particle(&stored.body.hostname, &stored.body.pathname);
-        let _ = app.chains.cast(&mut app.cell, native, hash, page, stored.body.timestamp / 1000);
+        app.pending.push((native, hash, page, stored.body.timestamp / 1000));
         app.seen.insert(hash);
         app.events.push(stored);
     }
@@ -238,10 +249,11 @@ async fn post_query(
     headers: HeaderMap,
     script: String,
 ) -> impl IntoResponse {
-    let app = state.lock().expect("lock");
+    let mut app = state.lock().expect("lock");
     if !authorized(&headers, &app.cfg.owner_token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    settle(&mut app);
     match app.cell.query(&script) {
         Ok(out) => Json(json!({
             "columns": out.columns,
@@ -332,6 +344,7 @@ async fn main() {
         chains: graph::Chains::default(),
         events: Vec::new(),
         seen: BTreeSet::new(),
+        pending: Vec::new(),
     };
     replay(&mut app);
     eprintln!("replayed {} events", app.events.len());
@@ -380,6 +393,7 @@ mod tests {
             chains: graph::Chains::default(),
             events: Vec::new(),
             seen: BTreeSet::new(),
+            pending: Vec::new(),
         }
     }
 
