@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lytics demo — every visitor is a neuron</title>
+<style>body{font-family:ui-monospace,monospace;background:#000;color:#f0f0f0;max-width:44rem;margin:2rem auto;padding:0 1rem;line-height:1.7}h1{color:#22c55e}a{color:#06b6d4}code{color:#22c55e}nav a{margin-right:1rem}section{min-height:120vh;border-top:1px solid #222;padding-top:1rem}#id{border:1px solid #222;padding:.6rem 1rem;font-size:.85rem;color:#888}</style>
+</head>
+<body>
+<h1>📈 lytics demo</h1>
+<p>this page carries the wasm tracker. open the network tab: a signed,
+pow-carrying pageview posts on load, attention events on scroll and leave.
+your identity is a neuron derived in-browser and stored locally.</p>
+<div id="id">deriving neuron…</div>
+<nav><a href="#" onclick="history.pushState({},'','/demo-a');return false">/demo-a</a>
+<a href="#" onclick="history.pushState({},'','/demo-b');return false">/demo-b</a>
+<a href="/" >dashboard →</a></nav>
+<section><h2>scroll down</h2><p>attention accrues while this page is visible and you are active. scroll to build depth; leave the tab to flush an attention event.</p></section>
+<section><h2>keep scrolling</h2><p>the 30-minute session is folklore. lytics measures attention on-device and segments by arrivals and passages.</p></section>
+<section><h2>bottom</h2><p>a returning neuron is recognized with zero referrer — the key is the identity.</p></section>
+<!-- the tracker: loader boots the wasm core, endpoint points at this server -->
+<script type="module" src="/tracker/loader.js" data-endpoint="" data-domain="demo.local"></script>
+<script>
+setInterval(() => {
+  const el = document.getElementById("id");
+  el.textContent = window.lytics?.neuron ? `neuron: ${window.lytics.neuron}` : "deriving neuron…";
+}, 500);
+</script>
+</body>
+</html>

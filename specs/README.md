@@ -28,8 +28,8 @@ visitor browser                     server                       reader
 
 | component | language | role |
 |---|---|---|
-| loader | JS, ≤2 KB inline | fires on page load, captures pageview + SPA route changes instantly, queues events until the core is ready |
-| core | Rust → wasm, ≤64 KB gzip budget | keygen, per-domain derivation, secp256k1 signing, PoW, beacon transport; loaded async so page performance never waits on crypto |
+| loader | JS module, ~2 KB source | fires on page load, captures pageview + SPA route changes instantly, runs the attention sensor, queues events until the core is ready |
+| core | Rust → wasm, ~172 KB gzip measured | keygen, per-domain derivation, secp256k1 signing, PoW; loaded async so page performance never waits on crypto |
 | ingest | Rust, axum | signature + PoW verification, replay dedup, UA parsing, MaxMind geo (ip read, used, discarded), referrer→source attribution, adaptive difficulty, signal casting into the cell |
 | store | [[cybergraph]] cell + [[bbg]] | the ingest service embeds a cell in-process; events enter as signed signals, bbg holds the state and its time dimension indexes the stream |
 | query | [[inf]] datalog over bbg | timeseries, top-N, passages, retention, funnels — each report is one inf rule; the path is live: cybergraph already runs inf over bbg state in-process |
@@ -43,10 +43,19 @@ leave the page.
 the loader exists because the browser admits wasm only through JS: a wasm
 module is fetched and instantiated by `WebAssembly.instantiateStreaming` —
 a JS API — and every DOM, storage and network touch (pushState hooks,
-IndexedDB, sendBeacon) crosses a JS import boundary. wasm-bindgen emits this
-glue anyway; the loader is that glue plus the instant-capture queue, held to
-a 2 KB budget. the crypto and all logic stay in Rust — JS is confined to the
-bootstrap the platform requires.
+localStorage, fetch) crosses a JS import boundary. the crypto and all logic
+stay in Rust — JS is confined to the bootstrap the platform requires and the
+sensor the platform exposes.
+
+on core size: the original ≤64 KB budget did not survive contact with the
+primitives. secp256k1 (k256), BIP32/39 with the 2048-word list, and
+Poseidon2 (hemera) sum to ~172 KB gzip under `opt-level="z"` + LTO — the
+honest floor for sovereign keys plus a native-hash PoW. it loads async and
+gates nothing: the loader captures the first pageview and the whole
+attention stream before the core finishes compiling, then signs the queue
+retroactively. paths to shrink it (a leaner field build, a hand-rolled
+secp256k1, dropping the English wordlist for raw-entropy import) are real
+but deferred — correctness and the honest number first.
 
 `/api/query` is owner-authenticated; public dashboards expose named,
 parameterized reports only — raw datalog never faces the open internet.

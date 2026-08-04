@@ -32,6 +32,11 @@ pub enum SignError {
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
 
+/// standard base64 — shared so the wasm core encodes pubkeys identically.
+pub fn b64_encode(bytes: &[u8]) -> String {
+    B64.encode(bytes)
+}
+
 /// the ADR-036 sign doc for a body, canonical-encoded.
 fn sign_doc(body_bytes: &[u8], signer_bech32: &str) -> Vec<u8> {
     let doc = serde_json::json!({

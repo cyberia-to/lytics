@@ -26,14 +26,12 @@ pub fn verify(event_hash: &Particle, nonce: u64, target: u64) -> bool {
     score(event_hash, nonce) < target
 }
 
-/// solve by linear scan from a random start; returns the nonce.
+/// solve by linear scan; returns the nonce. the scan starts at zero — each
+/// event has a distinct hash, so two solvers never share a solution space
+/// and a fixed start costs nothing. keeping it deterministic and free of
+/// clock/entropy calls is what lets the identical code run in wasm.
 pub fn solve(event_hash: &Particle, target: u64) -> u64 {
-    // start from entropy so parallel solvers rarely collide
-    let mut nonce = {
-        let mut b = [0u8; 8];
-        getrandom_fill(&mut b);
-        u64::from_le_bytes(b)
-    };
+    let mut nonce = 0u64;
     loop {
         if verify(event_hash, nonce, target) {
             return nonce;
@@ -49,23 +47,6 @@ pub fn target_from_difficulty(expected_hashes: u64) -> u64 {
         return u64::MAX;
     }
     u64::MAX / expected_hashes
-}
-
-fn getrandom_fill(buf: &mut [u8]) {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    // entropy quality is irrelevant here — the start point only spreads
-    // parallel solvers; correctness never depends on it
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    let seed = t.as_nanos() as u64 ^ (buf.as_ptr() as u64);
-    let mut x = seed | 1;
-    for chunk in buf.chunks_mut(8) {
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        let bytes = x.to_le_bytes();
-        let n = chunk.len();
-        chunk.copy_from_slice(&bytes[..n]);
-    }
 }
 
 #[cfg(test)]

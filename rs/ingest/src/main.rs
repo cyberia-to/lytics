@@ -337,6 +337,37 @@ async fn dash() -> Html<&'static str> {
     Html(include_str!("../static/dash.html"))
 }
 
+async fn demo() -> Html<&'static str> {
+    Html(include_str!("../static/demo.html"))
+}
+
+/// serve a tracker asset. loader.js is source (embedded); the wasm core and
+/// its bindings are generated (read from disk, built by build-tracker.sh).
+async fn tracker_asset(Path(name): Path<String>) -> impl IntoResponse {
+    let mime = |n: &str| if n.ends_with(".wasm") { "application/wasm" } else { "text/javascript" };
+    let headers = |m: &'static str| {
+        [
+            (axum::http::header::CONTENT_TYPE, m),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=3600"),
+        ]
+    };
+    if name == "loader.js" {
+        return (headers("text/javascript"), include_str!("../static/tracker/loader.js")).into_response();
+    }
+    if name == "lytics_core.js" || name == "lytics_core_bg.wasm" {
+        let dir = std::env::var("LYTICS_STATIC")
+            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/static/tracker").into());
+        match std::fs::read(format!("{dir}/{name}")) {
+            Ok(bytes) => return (headers(mime(&name)), bytes).into_response(),
+            Err(_) => {
+                return (StatusCode::NOT_FOUND, "tracker not built — run build-tracker.sh")
+                    .into_response()
+            }
+        }
+    }
+    (StatusCode::NOT_FOUND, "unknown asset").into_response()
+}
+
 #[tokio::main]
 async fn main() {
     let env = |k: &str| std::env::var(k).ok();
@@ -391,6 +422,8 @@ async fn main() {
     let shared: Shared = Arc::new(Mutex::new(app));
     let router = Router::new()
         .route("/", get(dash))
+        .route("/demo", get(demo))
+        .route("/tracker/{name}", get(tracker_asset))
         .route("/api/event", post(post_event))
         .route("/api/difficulty", get(get_difficulty))
         .route("/api/neuron/{neuron}", delete(delete_neuron))

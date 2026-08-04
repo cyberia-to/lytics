@@ -1,0 +1,25 @@
+# ---
+# tags: lytics, config
+# crystal-type: source
+# crystal-domain: cyber
+# ---
+[package]
+name = "lytics-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "lytics wasm tracker core — keys, sign, pow, attention sensor"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lytics-event.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "=0.2.113"
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

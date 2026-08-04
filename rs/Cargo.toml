@@ -5,7 +5,7 @@
 # ---
 [workspace]
 resolver = "3"
-members = ["event", "ingest", "agent"]
+members = ["event", "ingest", "agent", "core"]
 
 [workspace.package]
 version = "0.1.0"
@@ -29,3 +29,9 @@ ripemd = "0.1"
 bech32 = "0.11"
 base64 = "0.22"
 hex = "0.4"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
