@@ -42,10 +42,10 @@ with economics: every event carries a [[costly signal]].
 
 ## the identity model
 
-the browser holds a keypair. the address is the visitor.
+the browser holds a keypair. the visitor is a [[neuron]].
 
 1. first visit: the wasm core generates a seed, stores it in IndexedDB,
-   derives an address. zero interaction — the visitor sees nothing.
+   derives the neuron. zero interaction — the visitor sees nothing.
 2. every event is signed by the visitor key. an unsigned event is spam by
    definition.
 3. every event carries a proof of work over the event hash — target ~0.042 s
@@ -54,30 +54,30 @@ the browser holds a keypair. the address is the visitor.
 4. the seed exports as a BIP39 mnemonic. the visitor can import it in
    another browser and keep their identity — or burn it and start clean.
    identity belongs to the visitor, never to the site.
-5. per-domain derivation: the address a site sees is derived from
-   `(seed, domain)`. two sites see two unlinkable addresses. cross-site
+5. per-domain derivation: the neuron a site sees is derived from
+   `(seed, domain)`. two sites see two unlinkable neurons. cross-site
    profiles are impossible by construction; linking identities is a choice
    the visitor makes, never a default.
 
 the same key that signs a pageview can later sign a [[cyberlink]]. a lytics
-visitor identity is a proto-[[neuron]]: the event schema is shaped so that
-settlement into the cybergraph is a replay, never a migration.
+neuron is a proto-neuron of the [[cybergraph]]: the event schema is shaped so
+that settlement into the cybergraph is a replay, never a migration.
 
 ### privacy stance, stated plainly
 
-a persistent per-domain address is pseudonymous data. sites running lytics
+a persistent per-domain neuron is pseudonymous data. sites running lytics
 disclose it like any analytics. the design compensates with user sovereignty:
 the visitor holds the key, can export it, can erase their trail (deletion by
-address is one query), and cannot be tracked across sites. raw IP is used for
+neuron is one query), and cannot be tracked across sites. raw IP is used for
 geo lookup and discarded, following the plausible standard.
 
 ## what the identity unlocks
 
 | feature | mechanism |
 |---|---|
-| retention | first-seen cohort × weekly return matrix over stable addresses |
+| retention | first-seen cohort × weekly return matrix over stable neurons |
 | cohorts | group by first-seen week, campaign, or landing page |
-| funnels | ordered event-sequence match per address, across days |
+| funnels | ordered event-sequence match per neuron, across days |
 | bot filtering | PoW + signature verification at ingest — economic, not curated |
 | goals and revenue | named events with typed props, summed per cohort |
 | provable stats (endgame) | aggregates proven by [[zheng]] — "this page truly had N visitors" is a claim no other analytics can make |
@@ -122,7 +122,7 @@ bootstrap the platform requires.
 
 ```text
 event {
-  address        per-domain visitor address (bech32)
+  neuron         per-domain visitor neuron (bech32)
   name           pageview | engagement | <custom>
   hostname, pathname
   referrer, source, channel, utm{source,medium,campaign,term,content}
@@ -137,7 +137,7 @@ event {
 ```
 
 sessions are computed at read time: a session is a gap-free run of events per
-address with idle timeout 30 min. storing sessions as derived data keeps
+neuron with idle timeout 30 min. storing sessions as derived data keeps
 ingest append-only — the same discipline the cybergraph demands.
 
 ## reuse map
@@ -181,7 +181,7 @@ loader ≤2 KB.
 axum service embedding cozo: `POST /api/event` — verify signature, verify
 PoW, parse UA, geo lookup, referrer→source→channel attribution (Rust port of
 plausible behavior over the snowplow referer database), batch insert.
-difficulty oracle endpoint. deletion-by-address endpoint.
+difficulty oracle endpoint. deletion-by-neuron endpoint.
 
 ### phase 3 — queries: the full report set (3 sessions)
 
