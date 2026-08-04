@@ -103,8 +103,11 @@ fn main() {
     let seed = match std::env::var("LYTICS_MNEMONIC") {
         Ok(phrase) => Seed::from_mnemonic(&phrase).expect("mnemonic"),
         Err(_) => {
-            let (seed, phrase) = Seed::generate();
-            eprintln!("generated identity — export LYTICS_MNEMONIC to keep it:\n{phrase}");
+            let seed = Seed::generate();
+            eprintln!(
+                "generated identity — export LYTICS_MNEMONIC to keep it:\n{}",
+                seed.to_mnemonic()
+            );
             seed
         }
     };
