@@ -56,7 +56,7 @@ parameterized reports only — raw datalog never faces the open internet.
 keys follow the [[mudra]] bridge (`mudra/specs/bridge.md`) exactly:
 
 ```text
-mnemonic ──BIP-39──▶ seed ──BIP-32/44──▶ secp256k1 key (per-domain child)
+mnemonic ──BIP-39──▶ seed ──BIP-32──▶ secp256k1 key (per-domain child)
                                               │
                      compressed pubkey (33 B) ◀┘
                               │
@@ -64,8 +64,8 @@ mnemonic ──BIP-39──▶ seed ──BIP-32/44──▶ secp256k1 key (per-
         Hemera(compressed_pubkey)               = native neuron id (32 B)
 ```
 
-per-domain derivation folds the domain into the BIP44 account level:
-`account' = u31(Hemera(domain))`, path `m/44'/118'/account'/0/0` — one
+per-domain derivation folds the domain into the account level:
+`account' = u31(Hemera(domain))`, path `m/0'/0'/account'/0/0` — one
 seed, one hardened child per domain, so two sites observe two unlinkable
 neurons. `domain` is the registrable domain (eTLD+1 per the public suffix
 list), so one site's subdomains see one neuron. u31 truncation admits a
@@ -73,19 +73,21 @@ rare collision — two domains, one child key — with probability ~n²/2³²
 over a visitor's n sites; accepted for v1. the wire hrp defaults to
 `lytics` and is a deployment setting.
 
-why the account level carries the domain: account is the deepest hardened
-level in BIP44, and hardening is the unlinkability — a leaked child key or
-parent xpub reveals no sibling domains, while the change and address
-levels are unhardened by convention and would let one xpub enumerate a
-visitor's neurons everywhere. account also matches BIP44's own semantics
-(independent accounts under one seed) and stays reachable by standard
-wallets: compute `u31(Hemera(domain))`, enter it as the account index, and
-any Cosmos wallet derives the same neuron with no lytics software. 44' is
-the BIP44 purpose, 118' the Cosmos coin type the mudra bridge already
-uses, and change/index stay 0/0 — one domain, one neuron. the alternative
-(HKDF per domain outside BIP32) drops the u31 collision but loses wallet
-recoverability and the bridge's path conventions; lytics pays 31 bits for
-compatibility.
+why this path: the shape is BIP32 five levels deep — purpose, namespace,
+account, change, index — with every constant zeroed. lytics neurons are
+freshly minted keys; inheriting bitcoin's purpose (44') and the SLIP-44
+coin registry (118') would import a foreign gatekeeper for keys that
+never lived in those wallets. cyber starts its registries at zero: `0'`
+purpose, `0'` namespace, `0/0` tail — one domain, one neuron. the account
+level carries the domain because hardening is the unlinkability: a leaked
+child key or parent xpub reveals no sibling domains, while the unhardened
+change and index levels would let one xpub enumerate a visitor's neurons
+everywhere. recovery needs only BIP32 itself — any tool that accepts a
+custom path derives the neuron from mnemonic + domain — and the mudra
+claim is key-level, so the zero path bridges into the native graph
+unchanged. the alternative (HKDF per domain outside BIP32) drops the u31
+collision but leaves the derivation-path ecosystem entirely; lytics pays
+31 bits to stay inside it.
 events are signed in ADR-036 shape, and the claim is key-level (any
 secp256k1 key qualifies, path plays no part), so the existing mudra claim
 (`legacy address → native neuron`) carries any lytics neuron into the
@@ -208,7 +210,7 @@ visitor.
 | referrer→source engine | plausible core (AGPL) + snowplow referer db | clean reimplementation in Rust; behavior parity, fresh code |
 | geo | `maxminddb` crate + GeoLite2 | same lookup plausible uses |
 | ua parsing | `uaparser`/`woothee` crate | device class, browser, os |
-| identity pipeline | [[mudra]] bridge (`mudra/specs/bridge.md`) | BIP39 → BIP32/44 → secp256k1 → bech32, neuron = Hemera(pubkey), ADR-036 signing — the existing bridge claim carries a lytics neuron into the native graph |
+| identity pipeline | [[mudra]] bridge (`mudra/specs/bridge.md`) | BIP39 → BIP32 → secp256k1 → bech32, neuron = Hemera(pubkey), ADR-036 signing — the existing bridge claim carries a lytics neuron into the native graph |
 | pow + hashing | [[hemera]] Poseidon2 | event hash and PoW share the stack's native hash — a lytics event hash is already a particle hash |
 
 ## repo layout

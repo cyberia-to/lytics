@@ -81,7 +81,7 @@ harder:
 the browser holds a keypair. the visitor is a [[neuron]].
 
 1. first visit: the wasm core generates a seed in IndexedDB and derives
-   the neuron along the [[mudra]] bridge pipeline — BIP39 → BIP32/44 →
+   the neuron along the [[mudra]] bridge pipeline — BIP39 → BIP32 →
    secp256k1 → bech32, id = [[hemera]] of the pubkey. the visitor sees
    nothing.
 2. every event is signed. unsigned is spam by definition.
