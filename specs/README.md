@@ -30,7 +30,7 @@ visitor browser                     server                       reader
 |---|---|---|
 | loader | JS, ≤2 KB inline | fires on page load, captures pageview + SPA route changes instantly, queues events until the core is ready |
 | core | Rust → wasm, ≤64 KB gzip budget | keygen, per-domain derivation, secp256k1 signing, PoW, beacon transport; loaded async so page performance never waits on crypto |
-| ingest | Rust, axum | signature + PoW verification, UA parsing, MaxMind geo, referrer→source attribution, adaptive difficulty, batched writes |
+| ingest | Rust, axum | signature + PoW verification, replay dedup, UA parsing, MaxMind geo (ip read, used, discarded), referrer→source attribution, adaptive difficulty, signal casting into the cell |
 | store | [[cybergraph]] cell + [[bbg]] | the ingest service embeds a cell in-process; events enter as signed signals, bbg holds the state and its time dimension indexes the stream |
 | query | [[inf]] datalog over bbg | timeseries, top-N, passages, retention, funnels — each report is one inf rule; the path is live: cybergraph already runs inf over bbg state in-process |
 | dashboard | Rust, Leptos + Trunk | wasm dashboard, d3 widgets, realtime by polling |
@@ -48,6 +48,9 @@ glue anyway; the loader is that glue plus the instant-capture queue, held to
 a 2 KB budget. the crypto and all logic stay in Rust — JS is confined to the
 bootstrap the platform requires.
 
+`/api/query` is owner-authenticated; public dashboards expose named,
+parameterized reports only — raw datalog never faces the open internet.
+
 ## identity pipeline
 
 keys follow the [[mudra]] bridge (`mudra/specs/bridge.md`) exactly:
@@ -61,10 +64,14 @@ mnemonic ──BIP-39──▶ seed ──BIP-32/44──▶ secp256k1 key (per-
         Hemera(compressed_pubkey)               = native neuron id (32 B)
 ```
 
-per-domain derivation binds the child key to `(seed, domain)`, so two sites
-observe two unlinkable neurons. events are signed in ADR-036 shape; the
-existing mudra claim (`legacy address → native neuron`) carries any lytics
-neuron into the native graph unchanged.
+per-domain derivation folds the domain into the BIP44 account level:
+`account' = u31(Hemera(domain))`, path `m/44'/118'/account'/0/0` — one
+seed, one hardened child per domain, so two sites observe two unlinkable
+neurons. the wire hrp defaults to `lytics` and is a deployment setting.
+events are signed in ADR-036 shape, and the claim is key-level (any
+secp256k1 key qualifies, path plays no part), so the existing mudra claim
+(`legacy address → native neuron`) carries any lytics neuron into the
+native graph unchanged.
 
 ## event schema
 
@@ -87,6 +94,30 @@ event {
   signature                          secp256k1 over the canonical encoding, ADR-036 shape
 }
 ```
+
+### canonical encoding
+
+the signed bytes are the event as canonical JSON — sorted keys, no
+whitespace, integers only — wrapped in the ADR-036 sign doc. the event
+hash is [[hemera]] over those bytes; it doubles as the particle hash and
+as the dedup key.
+
+### proof of work
+
+the PoW predicate is one hash: find `nonce` such that
+`Hemera(event_hash ‖ nonce) < target`. the per-site `target` comes from
+the difficulty oracle (`GET /api/difficulty`), tuned so a median phone
+spends ~0.042 s; verification is a single hash. ingest rejects events
+whose timestamp falls outside a ±5 min window and events whose hash was
+already seen — a replayed signature buys nothing.
+
+### erasure
+
+the cell is append-only, and erasure still must be real. event payloads
+are encrypted at rest with a per-neuron data key held by the site;
+`DELETE /api/neuron` destroys the key. the graph keeps its hashes, the
+data becomes unreadable, already-published aggregates stay — the standard
+crypto-shredding resolution of append-only against the right to erase.
 
 ## the attention model
 
@@ -121,7 +152,8 @@ arrivals, passages and windows are read-time projections over the
 append-only event stream — ingest stays pure append, the discipline the
 cybergraph demands.
 
-one honest convention survives: heartbeat cadence and activity sampling are
+one honest convention survives: heartbeat cadence (default 15 s) and the
+activity window (default: 5 s of input silence pauses the clock) are
 measurement granularity — they bound how much attention a killed tab can
 lose. they are tuning knobs of the instrument, never semantics of the
 visitor.
@@ -160,17 +192,20 @@ signature, verify PoW, parse UA, geo lookup, referrer→source→channel
 attribution (Rust port of plausible behavior over the snowplow referer
 database, with assistant referrals as a first-class channel), cast the
 event as a signed signal into the cell. difficulty oracle endpoint.
-deletion-by-neuron endpoint.
+erasure endpoint (per-neuron data-key destruction).
 
 ### phase 3 — queries: the full report set (4 sessions)
 
 inf rules for: neurons/pageviews/attention timeseries, top pages, sources,
 countries, devices, goals, custom props — and the identity-powered tier:
-retention matrix, cohorts, funnels. arrival and passage segmentation at
-read time. where the report set needs primitives inf lacks today (count,
-group-by time bucket, top-N, ordered sequence match), extend inf itself,
-with behavior checked against the cozo reference. this phase lands the
-features plausible paywalls, because here they are one rule each.
+retention matrix, cohorts, funnels, attention per arrival, return
+probability within a stated window. arrival and passage segmentation at
+read time. all engine arithmetic is integer and field-element ([[inf]]
+values are field elements; ratios render at the dashboard edge). where the
+report set needs primitives inf lacks today (count, group-by time bucket,
+top-N, ordered sequence match), extend inf itself, with behavior checked
+against the cozo reference. this phase lands the features plausible
+paywalls, because here they are one rule each.
 
 ### phase 4 — dashboard (3 sessions)
 
@@ -210,6 +245,9 @@ curl -s https://lytics.local/api/event -d @weak-pow.json        # → 429
 
 # the premium tier answers
 echo '?[cohort, week, retained] := ...' | curl -s -d @- https://lytics.local/api/query
+
+# erasure destroys the neuron's data key
+curl -s -X DELETE https://lytics.local/api/neuron/<bech32>      # → 204, payloads unreadable
 
 # cyber.page dashboard shows live visitors from lytics, plausible.io off
 ```
