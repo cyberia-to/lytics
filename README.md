@@ -90,10 +90,11 @@ visitor browser                     server                       reader
 │ loader.js ~2KB  │  ───────► │ ingest (axum)    │        │ dashboard    │
 │  capture + queue│           │  verify sig+pow  │        │ leptos/trunk │
 │ core.wasm ≤64KB │           │  ua · geo · ref  │  ───►  │  d3 widgets  │
-│  keys·sign·pow  │           │  batch write     │        └──────────────┘
-└─────────────────┘           │ store (cozo)     │              ▲
-                              │  rocksdb+datalog │──────────────┘
-                              └──────────────────┘   HTTP /text-query
+│  keys·sign·pow  │           │  cast signal     │        └──────────────┘
+└─────────────────┘           │ cell (cybergraph)│              ▲
+                              │  bbg state·time  │              │
+                              │ query (inf)      │──────────────┘
+                              └──────────────────┘   HTTP /api/query
 ```
 
 | component | language | role |
@@ -101,8 +102,8 @@ visitor browser                     server                       reader
 | loader | JS, ≤2 KB inline | fires on page load, captures pageview + SPA route changes instantly, queues events until the core is ready |
 | core | Rust → wasm, ≤64 KB gzip budget | keygen, per-domain derivation, ed25519 signing, PoW, beacon transport; loaded async so page performance never waits on crypto |
 | ingest | Rust, axum | signature + PoW verification, UA parsing, MaxMind geo, referrer→source attribution, adaptive difficulty, batched writes |
-| store | cozo (the [[inf]] CozoDB fork) | RocksDB-backed datalog; events and sessions as relations |
-| query | cozo datalog over HTTP | timeseries, top-N, sessions, retention matrices, funnels — each report is one datalog rule |
+| store | [[cybergraph]] cell + [[bbg]] | the ingest service embeds a cell in-process; events enter as signed signals, bbg holds the state and its time dimension indexes the stream |
+| query | [[inf]] datalog over bbg | timeseries, top-N, episodes, retention, funnels — each report is one inf rule; the path is live: cybergraph already runs inf over bbg state in-process |
 | dashboard | Rust, Leptos + Trunk | wasm dashboard, d3 widgets, realtime by polling |
 
 the tracker splits in two on purpose: the loader guarantees plausible-grade
@@ -144,7 +145,8 @@ ingest append-only — the same discipline the cybergraph demands.
 
 | piece | source | how |
 |---|---|---|
-| aggregation server | `inf/rs/cozo/cozo-bin` | axum server with `/text-query`, import/export, SSE — extend with the ingest route |
+| query engine | [[inf]] native (`inf-parse/plan/eval`) | the implementation foundation — datalog over bbg, already wired via cybergraph `query()` |
+| datalog reference | `inf/rs/cozo` | reference only: behavior and api shapes to check against, never a dependency |
 | dashboard skeleton | `cyberstates` | Leptos + Trunk + d3, already deployed once |
 | tracker injection | `optica` `[analytics]` config | cyber.page pages already carry a snippet slot; point it at lytics |
 | referrer→source engine | plausible core (AGPL) + snowplow referer db | clean reimplementation in Rust; behavior parity, fresh code |
@@ -158,9 +160,10 @@ ingest append-only — the same discipline the cybergraph demands.
 - the daily salt. anonymity through amnesia trades the entire retention tier
   for a privacy property the visitor never controls. sovereign keys give the
   visitor stronger control and keep the data model whole.
-- clickhouse. cozo covers the target scale (cyber.page and peer sites) with
-  one embedded store; a columnar engine becomes a swap-in behind the query
-  layer if a site outgrows it.
+- clickhouse. the store is the cybergraph itself: bbg state inside an
+  embedded cell, read by inf. the target scale (cyber.page and peer sites)
+  fits; a columnar engine stays a swap-in behind the query layer if a site
+  ever outgrows it.
 - the SaaS scaffolding. billing, quotas, team roles, importers — 70% of
   plausible's codebase serves their cloud business. lytics ships the engine.
 
@@ -178,17 +181,21 @@ loader ≤2 KB.
 
 ### phase 2 — ingest (3 sessions)
 
-axum service embedding cozo: `POST /api/event` — verify signature, verify
-PoW, parse UA, geo lookup, referrer→source→channel attribution (Rust port of
-plausible behavior over the snowplow referer database), batch insert.
-difficulty oracle endpoint. deletion-by-neuron endpoint.
+axum service embedding a cybergraph cell: `POST /api/event` — verify
+signature, verify PoW, parse UA, geo lookup, referrer→source→channel
+attribution (Rust port of plausible behavior over the snowplow referer
+database), cast the event as a signed signal into the cell. difficulty
+oracle endpoint. deletion-by-neuron endpoint.
 
-### phase 3 — queries: the full report set (3 sessions)
+### phase 3 — queries: the full report set (4 sessions)
 
-datalog rules for: visitors/pageviews timeseries, top pages, sources,
+inf rules for: visitors/pageviews timeseries, top pages, sources,
 countries, devices, goals, custom props — and the identity-powered tier:
-retention matrix, cohorts, funnels. sessionization at read time. this phase
-lands the features plausible paywalls, because here they are one rule each.
+retention matrix, cohorts, funnels. episode segmentation at read time.
+where the report set needs primitives inf lacks today (count, group-by
+time bucket, top-N, ordered sequence match), extend inf itself, with
+behavior checked against the cozo reference. this phase lands the features
+plausible paywalls, because here they are one rule each.
 
 ### phase 4 — dashboard (3 sessions)
 
@@ -203,17 +210,17 @@ plausible.io to lytics, watch live events end to end, verify every widget
 against raw queries. the phase ends when cyber.page runs on lytics and the
 plausible subscription is off.
 
-total to usable: ~13 sessions. retention, cohorts and funnels ship inside
+total to usable: ~14 sessions. retention, cohorts and funnels ship inside
 that number — they are the point, never an add-on.
 
-### phase 6 — settlement into the cybergraph (blocked, by design)
+### phase 6 — the network and the proofs (blocked, by design)
 
-events become signed signals in a [[cyb]] cell, time lands in the [[bbg]]
-time dimension, reports run as inf-over-bbg queries, and [[zheng]] proves
-the aggregates. this phase waits on the stack's known blockers: network
-transport (radio/iroh unwired), bbg QueryProof serde, query wire protocol.
-the event schema and signing path are shaped now so phase 6 is a replay of
-stored signals, never a migration.
+events live in the cell from phase 2, so settlement needs no replay. what
+remains is the stack tail: cells syncing over the real transport
+(radio/iroh, unwired today), bbg QueryProof serde and the query wire
+protocol for provable reads, and [[zheng]] proving the aggregates — "this
+page truly had N visitors" verified by anyone. these wait on the stack's
+known blockers and land the moment the stack does.
 
 ## confidence milestone
 
@@ -226,7 +233,7 @@ curl -s https://lytics.local/api/event -d @forged.json          # → 401
 curl -s https://lytics.local/api/event -d @weak-pow.json        # → 429
 
 # the premium tier answers
-echo '?[cohort, week, retained] := ...' | curl -s -d @- https://lytics.local/text-query
+echo '?[cohort, week, retained] := ...' | curl -s -d @- https://lytics.local/api/query
 
 # cyber.page dashboard shows live visitors from lytics, plausible.io off
 ```
