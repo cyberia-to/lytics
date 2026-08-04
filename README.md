@@ -130,7 +130,7 @@ visitor browser                     server                       reader
 | component | language | role |
 |---|---|---|
 | loader | JS, ≤2 KB inline | fires on page load, captures pageview + SPA route changes instantly, queues events until the core is ready |
-| core | Rust → wasm, ≤64 KB gzip budget | keygen, per-domain derivation, ed25519 signing, PoW, beacon transport; loaded async so page performance never waits on crypto |
+| core | Rust → wasm, ≤64 KB gzip budget | keygen, per-domain derivation, secp256k1 signing, PoW, beacon transport; loaded async so page performance never waits on crypto |
 | ingest | Rust, axum | signature + PoW verification, UA parsing, MaxMind geo, referrer→source attribution, adaptive difficulty, batched writes |
 | store | [[cybergraph]] cell + [[bbg]] | the ingest service embeds a cell in-process; events enter as signed signals, bbg holds the state and its time dimension indexes the stream |
 | query | [[inf]] datalog over bbg | timeseries, top-N, passages, retention, funnels — each report is one inf rule; the path is live: cybergraph already runs inf over bbg state in-process |
