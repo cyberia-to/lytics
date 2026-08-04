@@ -1,7 +1,7 @@
 ---
 title: lytics
 tags: cyber, lytics, analytics, soft3
-crystal-type: spec
+crystal-type: entity
 crystal-domain: cyber
 icon: "📈"
 alias: cyber analytics, web analytics, lytics analytics
@@ -112,94 +112,15 @@ geo lookup and discarded, following the plausible standard.
 | goals and revenue | named events with typed props, summed per cohort |
 | provable stats (endgame) | aggregates proven by [[zheng]] — "this page truly had N visitors" is a claim no other analytics can make |
 
-## architecture
-
-```text
-visitor browser                     server                       reader
-┌─────────────────┐   HTTPS   ┌──────────────────┐        ┌──────────────┐
-│ loader.js ~2KB  │  ───────► │ ingest (axum)    │        │ dashboard    │
-│  capture + queue│           │  verify sig+pow  │        │ leptos/trunk │
-│ core.wasm ≤64KB │           │  ua · geo · ref  │  ───►  │  d3 widgets  │
-│  keys·sign·pow  │           │  cast signal     │        └──────────────┘
-└─────────────────┘           │ cell (cybergraph)│              ▲
-                              │  bbg state·time  │              │
-                              │ query (inf)      │──────────────┘
-                              └──────────────────┘   HTTP /api/query
-```
-
-| component | language | role |
-|---|---|---|
-| loader | JS, ≤2 KB inline | fires on page load, captures pageview + SPA route changes instantly, queues events until the core is ready |
-| core | Rust → wasm, ≤64 KB gzip budget | keygen, per-domain derivation, secp256k1 signing, PoW, beacon transport; loaded async so page performance never waits on crypto |
-| ingest | Rust, axum | signature + PoW verification, UA parsing, MaxMind geo, referrer→source attribution, adaptive difficulty, batched writes |
-| store | [[cybergraph]] cell + [[bbg]] | the ingest service embeds a cell in-process; events enter as signed signals, bbg holds the state and its time dimension indexes the stream |
-| query | [[inf]] datalog over bbg | timeseries, top-N, passages, retention, funnels — each report is one inf rule; the path is live: cybergraph already runs inf over bbg state in-process |
-| dashboard | Rust, Leptos + Trunk | wasm dashboard, d3 widgets, realtime by polling |
-
-the tracker splits in two on purpose: the loader guarantees plausible-grade
-capture latency and size; the wasm core carries the cryptography. events
-fired before the core loads are queued and signed retroactively before they
-leave the page.
-
-the loader exists because the browser admits wasm only through JS: a wasm
-module is fetched and instantiated by `WebAssembly.instantiateStreaming` —
-a JS API — and every DOM, storage and network touch (pushState hooks,
-IndexedDB, sendBeacon) crosses a JS import boundary. wasm-bindgen emits this
-glue anyway; the loader is that glue plus the instant-capture queue, held to
-a 2 KB budget. the crypto and all logic stay in Rust — JS is confined to the
-bootstrap the platform requires.
-
-## event schema
-
-```text
-event {
-  neuron         per-domain visitor neuron (bech32)
-  kind           pageview | attention | <custom>
-  navigation     external | direct | internal       pageview: how the neuron arrived
-  hostname, pathname
-  referrer, source, channel, utm{source,medium,campaign,term,content}
-  country, region, city             derived from ip, ip discarded
-  browser, browser_version, os, os_version, device
-  attention { ms, scroll_depth }    attention events: measured on-device
-  props { key: value, ... }         typed custom properties
-  revenue { amount, currency }      optional
-  timestamp
-  pow { nonce, difficulty }
-  signature                          secp256k1 over the canonical encoding, ADR-036 shape
-}
-```
-
-## the attention model
+## attention, measured
 
 lytics has no sessions. the 30-minute idle timeout that defines a "session"
 everywhere else is folklore inherited from 90s log analyzers — a guess about
 what silence means, standardized by google analytics and copied since,
 plausible included. silence in an event log is ambiguous: reading, parked
-tab, gone. lytics refuses to guess and measures instead.
-
-the tracker is a sensor. the browser emits the real boundaries —
-visibilitychange, focus, blur, pagehide — and the wasm core integrates
-attention on-device: time accumulates while the page is visible and the
-neuron is active, and ships as signed attention events (on hide, on leave,
-on a heartbeat that bounds loss). what other tools infer from timestamp
-gaps, lytics receives as measurement.
-
-grouping falls out of observables, never out of a clock constant:
-
-- arrival — a pageview whose navigation is external: outside referrer,
-  utm-tagged, or direct entry. attribution attaches to the arrival event
-  itself; entry page is the arrival's page.
-- passage — the run of a neuron's events from one arrival to the next (or
-  to the end of the stream). exit page is the passage's last page. every
-  question classically asked of a "session" — pages per visit, entry, exit,
-  source — is asked of a passage, and a passage is bounded by what the
-  neuron did, never by how long they paused.
-- window — when a question needs a time span (funnels, retention,
-  timeseries), the span is an explicit query parameter: hour, day, week,
-  between arrivals. the analyst states the window; the engine never invents
-  one.
-
-metrics follow the model:
+tab, gone. lytics refuses to guess and measures instead: the tracker is a
+sensor, the browser reports the real boundaries (visibility, focus, leave),
+and attention is integrated on-device and shipped as signed events.
 
 | classic | lytics |
 |---|---|
@@ -208,28 +129,9 @@ metrics follow the model:
 | sessions count | arrivals, broken down by source |
 | pages per session | pages per passage |
 
-arrivals, passages and windows are read-time projections over the
-append-only event stream — ingest stays pure append, the discipline the
-cybergraph demands.
-
-one honest convention survives: heartbeat cadence and activity sampling are
-measurement granularity — they bound how much attention a killed tab can
-lose. they are tuning knobs of the instrument, never semantics of the
-visitor.
-
-## reuse map
-
-| piece | source | how |
-|---|---|---|
-| query engine | [[inf]] native (`inf-parse/plan/eval`) | the implementation foundation — datalog over bbg, already wired via cybergraph `query()` |
-| datalog reference | `inf/rs/cozo` | reference only: behavior and api shapes to check against, never a dependency |
-| dashboard skeleton | `cyberstates` | Leptos + Trunk + d3, already deployed once |
-| tracker injection | `optica` `[analytics]` config | cyber.page pages already carry a snippet slot; point it at lytics |
-| referrer→source engine | plausible core (AGPL) + snowplow referer db | clean reimplementation in Rust; behavior parity, fresh code |
-| geo | `maxminddb` crate + GeoLite2 | same lookup plausible uses |
-| ua parsing | `uaparser`/`woothee` crate | device class, browser, os |
-| identity pipeline | [[mudra]] bridge (`mudra/specs/bridge.md`) | BIP39 → BIP32/44 → secp256k1 → bech32, neuron = Hemera(pubkey), ADR-036 signing — the existing bridge claim carries a lytics neuron into the native graph |
-| pow + hashing | [[hemera]] Poseidon2 | event hash and PoW share the stack's native hash — a lytics event hash is already a particle hash |
+visits become arrivals and passages — segments bounded by what the neuron
+did, never by how long they paused. the formal model lives in
+[specs/](specs/README.md).
 
 ## what lytics rejects
 
@@ -247,80 +149,11 @@ visitor.
 - the SaaS scaffolding. billing, quotas, team roles, importers — 70% of
   plausible's codebase serves their cloud business. lytics ships the engine.
 
-## implementation plan
+## deeper
 
-estimates follow the dev model: pomodoro = 30 min, session = 3 h.
-
-### phase 1 — identity + tracker (3 sessions)
-
-wasm core: keygen, IndexedDB seed storage, per-domain derivation, BIP39
-export/import, secp256k1 signing in ADR-036 shape, Poseidon2 PoW with
-adaptive difficulty,
-on-device attention integration (visibilitychange / focus / blur /
-pagehide + heartbeat), canonical event encoding, sendBeacon transport.
-loader.js: instant capture, SPA pushState hook, sensor hooks,
-queue-until-ready. size gate in CI: core ≤64 KB gzip, loader ≤2 KB.
-
-### phase 2 — ingest (3 sessions)
-
-axum service embedding a cybergraph cell: `POST /api/event` — verify
-signature, verify PoW, parse UA, geo lookup, referrer→source→channel
-attribution (Rust port of plausible behavior over the snowplow referer
-database, with assistant referrals as a first-class channel), cast the
-event as a signed signal into the cell. difficulty oracle endpoint.
-deletion-by-neuron endpoint.
-
-### phase 3 — queries: the full report set (4 sessions)
-
-inf rules for: neurons/pageviews/attention timeseries, top pages, sources,
-countries, devices, goals, custom props — and the identity-powered tier:
-retention matrix, cohorts, funnels. arrival and passage segmentation at
-read time. where the report set needs primitives inf lacks today (count,
-group-by time bucket, top-N, ordered sequence match), extend inf itself,
-with behavior checked against the cozo reference. this phase lands the
-features plausible paywalls, because here they are one rule each.
-
-### phase 4 — dashboard (3 sessions)
-
-Leptos app from the cyberstates skeleton: period picker, comparison,
-realtime, the classic widgets (neurons, pages, sources, geo, devices,
-goals) recast on attention metrics, plus retention grid and funnel view.
-public dashboard links.
-
-### phase 5 — integration + verification (1 session)
-
-deploy beside cyber.page, flip the optica `[analytics]` snippet from
-plausible.io to lytics, watch live events end to end, verify every widget
-against raw queries. the phase ends when cyber.page runs on lytics and the
-plausible subscription is off.
-
-total to usable: ~14 sessions. retention, cohorts and funnels ship inside
-that number — they are the point, never an add-on.
-
-### phase 6 — the network and the proofs (blocked, by design)
-
-events live in the cell from phase 2, so settlement needs no replay. what
-remains is the stack tail: cells syncing over the real transport
-(radio/iroh, unwired today), bbg QueryProof serde and the query wire
-protocol for provable reads, and [[zheng]] proving the aggregates — "this
-page truly had N visitors" verified by anyone. these wait on the stack's
-known blockers and land the moment the stack does.
-
-## confidence milestone
-
-```bash
-# a page with the snippet produces a signed, pow-carrying event
-curl -s https://lytics.local/api/event -d @signed-event.json   # → 202
-
-# forged signature and weak pow are rejected
-curl -s https://lytics.local/api/event -d @forged.json          # → 401
-curl -s https://lytics.local/api/event -d @weak-pow.json        # → 429
-
-# the premium tier answers
-echo '?[cohort, week, retained] := ...' | curl -s -d @- https://lytics.local/api/query
-
-# cyber.page dashboard shows live visitors from lytics, plausible.io off
-```
+the canonical specification — architecture, event schema, the formal
+attention model, the reuse map, the implementation plan and its confidence
+milestone — lives in [specs/](specs/README.md).
 
 ## license
 
