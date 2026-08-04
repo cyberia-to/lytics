@@ -1,0 +1,29 @@
+# ---
+# tags: lytics, config
+# crystal-type: source
+# crystal-domain: cyber
+# ---
+[package]
+name = "lytics-ingest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "lytics ingest — verify, enrich, cast into the cell, report"
+
+[dependencies]
+lytics-event.workspace = true
+cybergraph.workspace = true
+bbg.workspace = true
+hemera.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+base64.workspace = true
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+chacha20poly1305 = "0.10"
+woothee = "0.13"
+
+[dev-dependencies]
+lytics-event.workspace = true

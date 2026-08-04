@@ -1,0 +1,436 @@
+// ---
+// tags: lytics, rust
+// crystal-type: source
+// crystal-domain: cyber
+// ---
+//! read-time projections over the append-only event stream.
+//!
+//! arrivals, passages and windows per the attention model — no sessions,
+//! no timeouts. all arithmetic is integer; ratios are rendered at the
+//! dashboard edge. phase 3 migrates these projections into inf rules; the
+//! function signatures are the contract that migration must keep.
+
+use crate::enrich::{Attribution, Device};
+use lytics_event::{Actor, EventBody, Kind, Navigation};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// a stored, enriched event — payload-log plaintext.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Stored {
+    pub body: EventBody,
+    pub event_hash: String,
+    pub attribution: Attribution,
+    pub device: Device,
+    pub received_at: u64,
+}
+
+impl Stored {
+    pub fn is_pageview(&self) -> bool {
+        self.body.kind == Kind::Pageview
+    }
+
+    /// arrival: a pageview whose navigation is external or direct, or that
+    /// carries utm. attribution attaches here.
+    pub fn is_arrival(&self) -> bool {
+        self.is_pageview()
+            && (matches!(self.body.navigation, Some(Navigation::External) | Some(Navigation::Direct))
+                || self.body.utm.is_some())
+    }
+
+    pub fn attention_ms(&self) -> u64 {
+        self.body.attention.map(|a| a.ms).unwrap_or(0)
+    }
+}
+
+pub fn in_window<'a>(events: &'a [Stored], from: u64, to: u64) -> Vec<&'a Stored> {
+    events.iter().filter(|e| e.body.timestamp >= from && e.body.timestamp < to).collect()
+}
+
+/// events grouped per neuron, ordered by timestamp.
+fn per_neuron<'a>(events: &[&'a Stored]) -> BTreeMap<&'a str, Vec<&'a Stored>> {
+    let mut map: BTreeMap<&str, Vec<&Stored>> = BTreeMap::new();
+    for e in events {
+        map.entry(e.body.neuron.as_str()).or_default().push(e);
+    }
+    for list in map.values_mut() {
+        list.sort_by_key(|e| e.body.timestamp);
+    }
+    map
+}
+
+/// a passage: the run of a neuron's events from one arrival to the next.
+/// a stream that opens without an observed arrival still opens a passage —
+/// the first event is where the run began, arrival or no.
+pub struct Passage<'a> {
+    pub events: Vec<&'a Stored>,
+}
+
+impl Passage<'_> {
+    pub fn pages(&self) -> usize {
+        self.events.iter().filter(|e| e.is_pageview()).count()
+    }
+    pub fn entry(&self) -> Option<&str> {
+        self.events.iter().find(|e| e.is_pageview()).map(|e| e.body.pathname.as_str())
+    }
+    pub fn exit(&self) -> Option<&str> {
+        self.events.iter().rev().find(|e| e.is_pageview()).map(|e| e.body.pathname.as_str())
+    }
+}
+
+pub fn passages<'a>(events: &[&'a Stored]) -> Vec<Passage<'a>> {
+    let mut out = Vec::new();
+    for (_neuron, list) in per_neuron(events) {
+        let mut current: Vec<&Stored> = Vec::new();
+        for e in list {
+            if e.is_arrival() && !current.is_empty() {
+                out.push(Passage { events: std::mem::take(&mut current) });
+            }
+            current.push(e);
+        }
+        if !current.is_empty() {
+            out.push(Passage { events: current });
+        }
+    }
+    out
+}
+
+fn distinct_neurons(events: &[&Stored]) -> usize {
+    events.iter().map(|e| e.body.neuron.as_str()).collect::<BTreeSet<_>>().len()
+}
+
+pub fn overview(events: &[&Stored]) -> serde_json::Value {
+    let pageviews = events.iter().filter(|e| e.is_pageview()).count();
+    let attention: u64 = events.iter().map(|e| e.attention_ms()).sum();
+    let arrivals = events.iter().filter(|e| e.is_arrival()).count();
+    let agents = events
+        .iter()
+        .filter(|e| e.body.actor == Actor::Agent)
+        .map(|e| e.body.neuron.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
+    let p = passages(events);
+    json!({
+        "neurons": distinct_neurons(events),
+        "pageviews": pageviews,
+        "arrivals": arrivals,
+        "attention_ms": attention,
+        "agent_neurons": agents,
+        "passages": p.len(),
+    })
+}
+
+/// bucket ms: "hour" or "day".
+pub fn timeseries(events: &[&Stored], bucket_ms: u64) -> serde_json::Value {
+    let mut buckets: BTreeMap<u64, (BTreeSet<&str>, u64, u64)> = BTreeMap::new();
+    for e in events {
+        let b = e.body.timestamp / bucket_ms * bucket_ms;
+        let slot = buckets.entry(b).or_default();
+        slot.0.insert(e.body.neuron.as_str());
+        if e.is_pageview() {
+            slot.1 += 1;
+        }
+        slot.2 += e.attention_ms();
+    }
+    let rows: Vec<_> = buckets
+        .into_iter()
+        .map(|(t, (n, pv, att))| json!({"t": t, "neurons": n.len(), "pageviews": pv, "attention_ms": att}))
+        .collect();
+    json!(rows)
+}
+
+fn top_counts<'a, F: Fn(&&'a Stored) -> Option<String>>(
+    events: &[&'a Stored],
+    key: F,
+    limit: usize,
+) -> Vec<(String, u64)> {
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    for e in events {
+        if let Some(k) = key(e) {
+            *counts.entry(k).or_default() += 1;
+        }
+    }
+    let mut rows: Vec<_> = counts.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    rows.truncate(limit);
+    rows
+}
+
+pub fn pages(events: &[&Stored], limit: usize) -> serde_json::Value {
+    let mut attention: BTreeMap<String, u64> = BTreeMap::new();
+    for e in events {
+        *attention.entry(e.body.pathname.clone()).or_default() += e.attention_ms();
+    }
+    let rows = top_counts(events, |e| e.is_pageview().then(|| e.body.pathname.clone()), limit);
+    let out: Vec<_> = rows
+        .into_iter()
+        .map(|(path, pv)| {
+            let att = attention.get(&path).copied().unwrap_or(0);
+            json!({"pathname": path, "pageviews": pv, "attention_ms": att})
+        })
+        .collect();
+    json!(out)
+}
+
+pub fn sources(events: &[&Stored], limit: usize) -> serde_json::Value {
+    let arrivals: Vec<&Stored> = events.iter().filter(|e| e.is_arrival()).copied().collect();
+    let rows = top_counts(&arrivals, |e| {
+        Some(e.attribution.source.clone().unwrap_or_else(|| "direct".into()))
+    }, limit);
+    json!(rows.into_iter().map(|(s, n)| json!({"source": s, "arrivals": n})).collect::<Vec<_>>())
+}
+
+pub fn channels(events: &[&Stored]) -> serde_json::Value {
+    let arrivals: Vec<&Stored> = events.iter().filter(|e| e.is_arrival()).copied().collect();
+    let rows = top_counts(&arrivals, |e| Some(format!("{:?}", e.attribution.channel).to_lowercase()), 32);
+    json!(rows.into_iter().map(|(c, n)| json!({"channel": c, "arrivals": n})).collect::<Vec<_>>())
+}
+
+pub fn actors(events: &[&Stored]) -> serde_json::Value {
+    let humans: Vec<&Stored> =
+        events.iter().filter(|e| e.body.actor == Actor::Human).copied().collect();
+    let agents: Vec<&Stored> =
+        events.iter().filter(|e| e.body.actor == Actor::Agent).copied().collect();
+    let agent_names = top_counts(&agents, |e| e.body.agent.as_ref().map(|a| a.name.clone()), 16);
+    json!({
+        "human": {"neurons": distinct_neurons(&humans), "pageviews": humans.iter().filter(|e| e.is_pageview()).count(), "attention_ms": humans.iter().map(|e| e.attention_ms()).sum::<u64>()},
+        "agent": {"neurons": distinct_neurons(&agents), "pageviews": agents.iter().filter(|e| e.is_pageview()).count(), "declared": agent_names.into_iter().map(|(n, c)| json!({"name": n, "pageviews": c})).collect::<Vec<_>>()},
+    })
+}
+
+pub fn devices(events: &[&Stored], limit: usize) -> serde_json::Value {
+    let browsers = top_counts(events, |e| e.device.browser.clone(), limit);
+    let oses = top_counts(events, |e| e.device.os.clone(), limit);
+    let classes = top_counts(events, |e| e.device.device.clone(), limit);
+    json!({
+        "browsers": browsers.into_iter().map(|(k, n)| json!({"browser": k, "events": n})).collect::<Vec<_>>(),
+        "os": oses.into_iter().map(|(k, n)| json!({"os": k, "events": n})).collect::<Vec<_>>(),
+        "classes": classes.into_iter().map(|(k, n)| json!({"class": k, "events": n})).collect::<Vec<_>>(),
+    })
+}
+
+const WEEK_MS: u64 = 7 * 24 * 3600 * 1000;
+
+/// retention matrix over ALL events (cohorts need full history):
+/// cohort week (first-seen) × week offset → distinct neurons active.
+pub fn retention(events: &[Stored], weeks: usize) -> serde_json::Value {
+    let mut first_seen: BTreeMap<&str, u64> = BTreeMap::new();
+    for e in events {
+        let entry = first_seen.entry(e.body.neuron.as_str()).or_insert(e.body.timestamp);
+        if e.body.timestamp < *entry {
+            *entry = e.body.timestamp;
+        }
+    }
+    // cohort week → offset → set of neurons
+    let mut matrix: BTreeMap<u64, BTreeMap<u64, BTreeSet<&str>>> = BTreeMap::new();
+    for e in &*events {
+        let first = first_seen[e.body.neuron.as_str()];
+        let cohort = first / WEEK_MS;
+        let offset = e.body.timestamp / WEEK_MS - cohort;
+        if (offset as usize) < weeks {
+            matrix.entry(cohort).or_default().entry(offset).or_default().insert(&e.body.neuron);
+        }
+    }
+    let rows: Vec<_> = matrix
+        .into_iter()
+        .map(|(cohort, offsets)| {
+            let size = offsets.get(&0).map(|s| s.len()).unwrap_or(0);
+            let cells: Vec<usize> =
+                (0..weeks as u64).map(|o| offsets.get(&o).map(|s| s.len()).unwrap_or(0)).collect();
+            json!({"cohort_week": cohort, "cohort_start_ms": cohort * WEEK_MS, "size": size, "weeks": cells})
+        })
+        .collect();
+    json!(rows)
+}
+
+/// ordered funnel: how many neurons complete each prefix of `steps`
+/// (pathnames) within the window.
+pub fn funnel(events: &[&Stored], steps: &[String]) -> serde_json::Value {
+    if steps.is_empty() {
+        return json!([]);
+    }
+    let mut reached = vec![0usize; steps.len()];
+    for (_neuron, list) in per_neuron(events) {
+        let mut at = 0usize;
+        for e in list {
+            if at < steps.len() && e.is_pageview() && e.body.pathname == steps[at] {
+                at += 1;
+            }
+        }
+        for slot in reached.iter_mut().take(at) {
+            *slot += 1;
+        }
+    }
+    json!(steps
+        .iter()
+        .zip(reached)
+        .map(|(s, n)| json!({"step": s, "neurons": n}))
+        .collect::<Vec<_>>())
+}
+
+/// return probability: of neurons first seen in [from, to), how many came
+/// back within `horizon_ms` after their first event. integers only —
+/// (returned, total) — the ratio renders at the edge.
+pub fn returns(events: &[Stored], from: u64, to: u64, horizon_ms: u64) -> serde_json::Value {
+    let mut first_seen: BTreeMap<&str, u64> = BTreeMap::new();
+    for e in events {
+        let entry = first_seen.entry(e.body.neuron.as_str()).or_insert(e.body.timestamp);
+        if e.body.timestamp < *entry {
+            *entry = e.body.timestamp;
+        }
+    }
+    let cohort: BTreeMap<&str, u64> = first_seen
+        .into_iter()
+        .filter(|(_, t)| *t >= from && *t < to)
+        .collect();
+    let mut returned: BTreeSet<&str> = BTreeSet::new();
+    for e in events {
+        if let Some(first) = cohort.get(e.body.neuron.as_str()) {
+            if e.body.timestamp > *first && e.body.timestamp <= first + horizon_ms {
+                returned.insert(&e.body.neuron);
+            }
+        }
+    }
+    json!({"cohort": cohort.len(), "returned": returned.len(), "horizon_ms": horizon_ms})
+}
+
+pub fn passages_report(events: &[&Stored], limit: usize) -> serde_json::Value {
+    let p = passages(events);
+    let total = p.len();
+    let pages_total: usize = p.iter().map(|x| x.pages()).sum();
+    let mut entries: BTreeMap<String, u64> = BTreeMap::new();
+    let mut exits: BTreeMap<String, u64> = BTreeMap::new();
+    for x in &p {
+        if let Some(e) = x.entry() {
+            *entries.entry(e.to_string()).or_default() += 1;
+        }
+        if let Some(e) = x.exit() {
+            *exits.entry(e.to_string()).or_default() += 1;
+        }
+    }
+    let top = |m: BTreeMap<String, u64>| {
+        let mut rows: Vec<_> = m.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        rows.truncate(limit);
+        rows.into_iter().map(|(k, n)| json!({"pathname": k, "passages": n})).collect::<Vec<_>>()
+    };
+    json!({
+        "passages": total,
+        "pages_total": pages_total,
+        "entries": top(entries),
+        "exits": top(exits),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::enrich::Channel;
+    use lytics_event::event::Utm;
+
+    fn ev(neuron: &str, path: &str, ts: u64, nav: Option<Navigation>, att: u64) -> Stored {
+        Stored {
+            body: EventBody {
+                neuron: neuron.into(),
+                actor: Actor::Human,
+                agent: None,
+                kind: if att > 0 { Kind::Attention } else { Kind::Pageview },
+                navigation: nav,
+                hostname: "cyber.page".into(),
+                pathname: path.into(),
+                referrer: None,
+                utm: None,
+                attention: (att > 0).then_some(lytics_event::Attention { ms: att, scroll_depth: 0 }),
+                props: None,
+                revenue: None,
+                timestamp: ts,
+            },
+            event_hash: format!("{neuron}-{path}-{ts}"),
+            attribution: Attribution { source: None, channel: Channel::Direct },
+            device: Device { browser: None, browser_version: None, os: None, device: None },
+            received_at: ts,
+        }
+    }
+
+    #[test]
+    fn passages_split_on_arrivals_never_on_pauses() {
+        let events = vec![
+            ev("n1", "/a", 1000, Some(Navigation::External), 0),
+            // a six-hour pause — same passage, no timeout exists
+            ev("n1", "/b", 1000 + 6 * 3600 * 1000, Some(Navigation::Internal), 0),
+            // a new arrival — new passage
+            ev("n1", "/c", 1000 + 7 * 3600 * 1000, Some(Navigation::External), 0),
+        ];
+        let refs: Vec<&Stored> = events.iter().collect();
+        let p = passages(&refs);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].pages(), 2);
+        assert_eq!(p[0].entry(), Some("/a"));
+        assert_eq!(p[0].exit(), Some("/b"));
+        assert_eq!(p[1].entry(), Some("/c"));
+    }
+
+    #[test]
+    fn utm_pageview_is_arrival() {
+        let mut e = ev("n1", "/a", 1, Some(Navigation::Internal), 0);
+        e.body.utm = Some(Utm { source: Some("nl".into()), medium: None, campaign: None, term: None, content: None });
+        assert!(e.is_arrival());
+    }
+
+    #[test]
+    fn funnel_counts_ordered_prefixes() {
+        let events = vec![
+            ev("n1", "/a", 1, Some(Navigation::External), 0),
+            ev("n1", "/b", 2, Some(Navigation::Internal), 0),
+            ev("n2", "/a", 1, Some(Navigation::External), 0),
+            ev("n3", "/b", 1, Some(Navigation::External), 0), // out of order: /b before /a
+        ];
+        let refs: Vec<&Stored> = events.iter().collect();
+        let f = funnel(&refs, &["/a".into(), "/b".into()]);
+        let rows = f.as_array().unwrap();
+        assert_eq!(rows[0]["neurons"], 2); // n1, n2 reached /a
+        assert_eq!(rows[1]["neurons"], 1); // only n1 continued to /b
+    }
+
+    #[test]
+    fn retention_places_neurons_in_cohorts() {
+        let w = WEEK_MS;
+        let events = vec![
+            ev("n1", "/", 0, Some(Navigation::External), 0),
+            ev("n1", "/", w + 10, Some(Navigation::External), 0), // returns week 1
+            ev("n2", "/", 5, Some(Navigation::External), 0),      // never returns
+        ];
+        let r = retention(&events, 4);
+        let rows = r.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["size"], 2);
+        assert_eq!(rows[0]["weeks"][0], 2);
+        assert_eq!(rows[0]["weeks"][1], 1);
+    }
+
+    #[test]
+    fn returns_counts_cohort_and_returned() {
+        let events = vec![
+            ev("n1", "/", 100, Some(Navigation::External), 0),
+            ev("n1", "/", 200, Some(Navigation::External), 0),
+            ev("n2", "/", 150, Some(Navigation::External), 0),
+        ];
+        let r = returns(&events, 0, 1000, 1000);
+        assert_eq!(r["cohort"], 2);
+        assert_eq!(r["returned"], 1);
+    }
+
+    #[test]
+    fn attention_sums_into_overview() {
+        let events = vec![
+            ev("n1", "/a", 1, Some(Navigation::External), 0),
+            ev("n1", "/a", 2, None, 42_000),
+        ];
+        let refs: Vec<&Stored> = events.iter().collect();
+        let o = overview(&refs);
+        assert_eq!(o["attention_ms"], 42_000);
+        assert_eq!(o["pageviews"], 1);
+        assert_eq!(o["neurons"], 1);
+    }
+}
