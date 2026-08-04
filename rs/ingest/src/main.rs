@@ -9,6 +9,7 @@
 //! the cell and the in-memory index are replayed from it at startup.
 
 mod enrich;
+mod geo;
 mod graph;
 mod reports;
 mod store;
@@ -40,6 +41,7 @@ struct Cfg {
 
 struct App {
     cfg: Cfg,
+    geo: Option<geo::GeoDb>,
     store: store::Store,
     cell: Cybergraph,
     chains: graph::Chains,
@@ -92,7 +94,12 @@ impl Reject {
 /// the verification pipeline — spec order: canonical → dedup → skew →
 /// signature → pow (enrollment target for unseen neurons) → enrich → append
 /// → cast.
-fn ingest(app: &mut App, event: Event, ua: Option<&str>) -> Result<(&'static str, String), Reject> {
+fn ingest(
+    app: &mut App,
+    event: Event,
+    ua: Option<&str>,
+    ip: Option<std::net::IpAddr>,
+) -> Result<(&'static str, String), Reject> {
     let body_bytes = event.body_bytes().map_err(|e| Reject::Bad(e.to_string()))?;
     let hash = event_hash(&body_bytes);
     let hash_hex = hex::encode(hash);
@@ -132,6 +139,11 @@ fn ingest(app: &mut App, event: Event, ua: Option<&str>) -> Result<(&'static str
 
     let attribution = enrich::attribute(&event.body);
     let device = enrich::parse_ua(ua);
+    // ip is read, used for one lookup, and discarded — never stored
+    let geo = match (&app.geo, ip) {
+        (Some(db), Some(ip)) => db.lookup(ip),
+        _ => None,
+    };
     let native = *hemera::hash(
         &base64_decode(&event.pubkey).ok_or_else(|| Reject::Bad("pubkey b64".into()))?,
     )
@@ -142,6 +154,7 @@ fn ingest(app: &mut App, event: Event, ua: Option<&str>) -> Result<(&'static str
         event_hash: hash_hex.clone(),
         attribution,
         device,
+        geo,
         received_at: now,
     };
     let plaintext = serde_json::to_vec(&stored).map_err(|e| Reject::Bad(e.to_string()))?;
@@ -192,12 +205,20 @@ fn replay(app: &mut App) {
 
 async fn post_event(
     State(state): State<Shared>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Json(event): Json<Event>,
 ) -> impl IntoResponse {
     let ua = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(String::from);
+    // first hop of x-forwarded-for when behind a proxy, else the peer
+    let ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .and_then(|v| v.trim().parse().ok())
+        .or(Some(peer.ip()));
     let mut app = state.lock().expect("lock");
-    match ingest(&mut app, event, ua.as_deref()) {
+    match ingest(&mut app, event, ua.as_deref(), ip) {
         Ok((status, hash)) => {
             (StatusCode::ACCEPTED, Json(json!({"status": status, "event": hash}))).into_response()
         }
@@ -291,6 +312,7 @@ async fn get_report(
         "channels" => reports::channels(&windowed),
         "actors" => reports::actors(&windowed),
         "devices" => reports::devices(&windowed, limit),
+        "countries" => reports::countries(&windowed, limit),
         "passages" => reports::passages_report(&windowed, limit),
         "retention" => reports::retention(&app.events, parse_u64("weeks", 8) as usize),
         "returns" => reports::returns(
@@ -331,6 +353,22 @@ async fn main() {
         t
     });
 
+    let geo_db = env("LYTICS_GEO_DB")
+        .or_else(|| {
+            let local = "data/dbip-city-lite.mmdb";
+            std::path::Path::new(local).exists().then(|| local.to_string())
+        })
+        .and_then(|p| match geo::GeoDb::open(&p) {
+            Ok(db) => {
+                eprintln!("geo db loaded: {p}");
+                Some(db)
+            }
+            Err(e) => {
+                eprintln!("geo db unavailable ({p}): {e}");
+                None
+            }
+        });
+
     let store = store::Store::open(&data_dir).expect("store");
     let mut app = App {
         cfg: Cfg {
@@ -339,6 +377,7 @@ async fn main() {
             enroll_target: target_from_difficulty(event_hashes.saturating_mul(enroll_mult)),
             owner_token,
         },
+        geo: geo_db,
         store,
         cell: Cybergraph::new(),
         chains: graph::Chains::default(),
@@ -362,7 +401,12 @@ async fn main() {
     let addr = format!("0.0.0.0:{port}");
     eprintln!("lytics ingest on http://{addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
-    axum::serve(listener, router).await.expect("serve");
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .expect("serve");
 }
 
 #[cfg(test)]
@@ -388,6 +432,7 @@ mod tests {
                 enroll_target: target_from_difficulty(16),
                 owner_token: "t".into(),
             },
+            geo: None,
             store: store::Store::open(&dir.to_string_lossy()).unwrap(),
             cell: Cybergraph::new(),
             chains: graph::Chains::default(),
@@ -427,15 +472,15 @@ mod tests {
         let seed = Seed::from_mnemonic(PHRASE).unwrap();
         // first event from an unseen neuron must meet the enrollment target
         let ev = signed_event(&seed, "/a", app.cfg.enroll_target);
-        let (status, _) = ingest(&mut app, ev.clone(), Some("Mozilla/5.0")).unwrap();
+        let (status, _) = ingest(&mut app, ev.clone(), Some("Mozilla/5.0"), None).unwrap();
         assert_eq!(status, "accepted");
         // replayed: idempotent
-        let (status, _) = ingest(&mut app, ev, None).unwrap();
+        let (status, _) = ingest(&mut app, ev, None, None).unwrap();
         assert_eq!(status, "duplicate");
         assert_eq!(app.events.len(), 1);
         // enrolled now: the cheaper event target suffices
         let ev2 = signed_event(&seed, "/b", app.cfg.event_target);
-        let (status, _) = ingest(&mut app, ev2, None).unwrap();
+        let (status, _) = ingest(&mut app, ev2, None, None).unwrap();
         assert_eq!(status, "accepted");
         // attribution: chatgpt referral is the ai channel
         assert!(matches!(app.events[0].attribution.channel, enrich::Channel::Ai));
@@ -451,7 +496,7 @@ mod tests {
         let bytes = lytics_event::canonical_json(&ev.body).unwrap();
         let h = event_hash(&bytes);
         ev.pow.nonce = solve(&h, app.cfg.enroll_target);
-        assert!(matches!(ingest(&mut app, ev, None), Err(Reject::Auth(_))));
+        assert!(matches!(ingest(&mut app, ev, None, None), Err(Reject::Auth(_))));
     }
 
     #[test]
@@ -461,7 +506,7 @@ mod tests {
         app.cfg.enroll_target = 1;
         let seed = Seed::from_mnemonic(PHRASE).unwrap();
         let ev = signed_event(&seed, "/a", target_from_difficulty(4));
-        assert!(matches!(ingest(&mut app, ev, None), Err(Reject::Pow(_))));
+        assert!(matches!(ingest(&mut app, ev, None, None), Err(Reject::Pow(_))));
     }
 
     #[test]
@@ -470,6 +515,6 @@ mod tests {
         let seed = Seed::from_mnemonic(PHRASE).unwrap();
         let mut ev = signed_event(&seed, "/a", app.cfg.enroll_target);
         ev.body.timestamp = now_ms() + 10 * 60 * 1000;
-        assert!(matches!(ingest(&mut app, ev, None), Err(Reject::Bad(_))));
+        assert!(matches!(ingest(&mut app, ev, None, None), Err(Reject::Bad(_))));
     }
 }

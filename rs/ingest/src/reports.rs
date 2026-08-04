@@ -23,6 +23,8 @@ pub struct Stored {
     pub event_hash: String,
     pub attribution: Attribution,
     pub device: Device,
+    #[serde(default)]
+    pub geo: Option<crate::geo::Geo>,
     pub received_at: u64,
 }
 
@@ -199,6 +201,25 @@ pub fn actors(events: &[&Stored]) -> serde_json::Value {
     })
 }
 
+pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
+    let mut neurons: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+    for e in events {
+        if let Some(geo) = &e.geo {
+            if let Some(c) = &geo.country {
+                neurons.entry(c.clone()).or_default().insert(e.body.neuron.as_str());
+            }
+        }
+    }
+    let rows = top_counts(events, |e| e.geo.as_ref().and_then(|g| g.country.clone()), limit);
+    json!(rows
+        .into_iter()
+        .map(|(c, n)| {
+            let distinct = neurons.get(&c).map(|s| s.len()).unwrap_or(0);
+            json!({"country": c, "events": n, "neurons": distinct})
+        })
+        .collect::<Vec<_>>())
+}
+
 pub fn devices(events: &[&Stored], limit: usize) -> serde_json::Value {
     let browsers = top_counts(events, |e| e.device.browser.clone(), limit);
     let oses = top_counts(events, |e| e.device.os.clone(), limit);
@@ -349,6 +370,7 @@ mod tests {
             event_hash: format!("{neuron}-{path}-{ts}"),
             attribution: Attribution { source: None, channel: Channel::Direct },
             device: Device { browser: None, browser_version: None, os: None, device: None },
+            geo: None,
             received_at: ts,
         }
     }
