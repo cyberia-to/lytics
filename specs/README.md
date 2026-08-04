@@ -72,6 +72,20 @@ list), so one site's subdomains see one neuron. u31 truncation admits a
 rare collision — two domains, one child key — with probability ~n²/2³²
 over a visitor's n sites; accepted for v1. the wire hrp defaults to
 `lytics` and is a deployment setting.
+
+why the account level carries the domain: account is the deepest hardened
+level in BIP44, and hardening is the unlinkability — a leaked child key or
+parent xpub reveals no sibling domains, while the change and address
+levels are unhardened by convention and would let one xpub enumerate a
+visitor's neurons everywhere. account also matches BIP44's own semantics
+(independent accounts under one seed) and stays reachable by standard
+wallets: compute `u31(Hemera(domain))`, enter it as the account index, and
+any Cosmos wallet derives the same neuron with no lytics software. 44' is
+the BIP44 purpose, 118' the Cosmos coin type the mudra bridge already
+uses, and change/index stay 0/0 — one domain, one neuron. the alternative
+(HKDF per domain outside BIP32) drops the u31 collision but loses wallet
+recoverability and the bridge's path conventions; lytics pays 31 bits for
+compatibility.
 events are signed in ADR-036 shape, and the claim is key-level (any
 secp256k1 key qualifies, path plays no part), so the existing mudra claim
 (`legacy address → native neuron`) carries any lytics neuron into the
