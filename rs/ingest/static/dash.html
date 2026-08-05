@@ -1,45 +1,183 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>lytics</title>
-<style>body{font-family:ui-monospace,monospace;background:#000;color:#f0f0f0;max-width:48rem;margin:2rem auto;padding:0 1rem}h1{color:#22c55e;font-size:1.4rem}h2{color:#06b6d4;font-size:1rem;margin-top:1.6rem}table{width:100%;border-collapse:collapse;font-size:.85rem}td,th{text-align:left;padding:.25rem .5rem;border-bottom:1px solid #222}th{color:#888}#ov{display:flex;gap:1.5rem;flex-wrap:wrap}#ov div{border:1px solid #222;padding:.6rem 1rem}#ov b{display:block;font-size:1.3rem;color:#22c55e}small{color:#666}</style>
-</head>
-<body>
-<h1>📈 lytics</h1>
-<small>every visitor is a neuron — symbolic dashboard, the engine is the product</small>
-<div id="ov"></div>
-<h2>particles</h2><table id="particles"></table>
-<h2>sources</h2><table id="sources"></table>
-<h2>channels</h2><table id="channels"></table>
-<h2>actors</h2><table id="actors"></table>
-<script>
-const get = (name, extra="") => fetch(`/api/report/${name}${extra}`).then(r => r.json());
-const fmt = ms => ms >= 60000 ? `${Math.round(ms/60000)}m` : `${Math.round(ms/1000)}s`;
-function rows(el, header, data, cols) {
-  el.innerHTML = `<tr>${header.map(h => `<th>${h}</th>`).join("")}</tr>` +
-    data.map(r => `<tr>${cols.map(c => `<td>${r[c]}</td>`).join("")}</tr>`).join("");
-}
-async function refresh() {
-  const o = await get("overview");
-  document.getElementById("ov").innerHTML = [
-    ["neurons", o.neurons], ["views", o.views], ["arrivals", o.arrivals],
-    ["passages", o.passages], ["attention", fmt(o.attention_ms)], ["agents", o.agent_neurons],
-  ].map(([k, v]) => `<div><b>${v}</b>${k}</div>`).join("");
-  rows(document.getElementById("particles"), ["path", "views", "attention"],
-    (await get("particles")).map(p => ({...p, attention_ms: fmt(p.attention_ms)})),
-    ["pathname", "views", "attention_ms"]);
-  rows(document.getElementById("sources"), ["source", "arrivals"], await get("sources"), ["source", "arrivals"]);
-  rows(document.getElementById("channels"), ["channel", "arrivals"], await get("channels"), ["channel", "arrivals"]);
-  const a = await get("actors");
-  document.getElementById("actors").innerHTML =
-    `<tr><th>actor</th><th>neurons</th><th>views</th></tr>` +
-    `<tr><td>human</td><td>${a.human.neurons}</td><td>${a.human.views}</td></tr>` +
-    `<tr><td>agent</td><td>${a.agent.neurons}</td><td>${a.agent.views}</td></tr>` +
-    a.agent.declared.map(d => `<tr><td>· ${d.name}</td><td></td><td>${d.views}</td></tr>`).join("");
-}
-refresh(); setInterval(refresh, 5000);
-</script>
-</body>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>lytics</title>
+        <style>
+            body {
+                font-family: ui-monospace, monospace;
+                background: #000;
+                color: #f0f0f0;
+                max-width: 48rem;
+                margin: 2rem auto;
+                padding: 0 1rem;
+            }
+            h1 {
+                color: #22c55e;
+                font-size: 1.4rem;
+                margin-bottom: 0.25rem;
+            }
+            h2 {
+                color: #06b6d4;
+                font-size: 1rem;
+                margin-top: 1.6rem;
+            }
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 0.85rem;
+            }
+            td,
+            th {
+                text-align: left;
+                padding: 0.25rem 0.5rem;
+                border-bottom: 1px solid #222;
+            }
+            th {
+                color: #888;
+            }
+            #ov {
+                display: flex;
+                gap: 1.5rem;
+                flex-wrap: wrap;
+            }
+            #ov div {
+                border: 1px solid #222;
+                padding: 0.6rem 1rem;
+            }
+            #ov b {
+                display: block;
+                font-size: 1.3rem;
+                color: #22c55e;
+            }
+            #meta {
+                color: #666;
+                font-size: 0.8rem;
+                margin: 0.4rem 0 1rem;
+                line-height: 1.5;
+            }
+            #meta time {
+                color: #888;
+            }
+            small.tagline {
+                color: #666;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>📈 lytics</h1>
+        <small class="tagline"
+            >every visitor is a neuron — symbolic dashboard, the engine is the
+            product</small
+        >
+        <div id="meta">loading window…</div>
+        <div id="ov"></div>
+        <h2>particles</h2>
+        <table id="particles"></table>
+        <h2>sources</h2>
+        <table id="sources"></table>
+        <h2>channels</h2>
+        <table id="channels"></table>
+        <h2>actors</h2>
+        <table id="actors"></table>
+        <script>
+            // page is served under /lytics/ — keep API relative to that prefix
+            const root = location.pathname.replace(/\/?$/, "/");
+            const get = (name, extra = "") =>
+                fetch(`${root}api/report/${name}${extra}`).then((r) =>
+                    r.json(),
+                );
+
+            const fmt = (ms) =>
+                ms >= 60000
+                    ? `${Math.round(ms / 60000)}m`
+                    : `${Math.round(ms / 1000)}s`;
+
+            const fmtDay = (ms) => {
+                const d = new Date(ms);
+                const y = d.getUTCFullYear();
+                const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+                const day = String(d.getUTCDate()).padStart(2, "0");
+                return `${y}-${m}-${day}`;
+            };
+
+            const fmtStamp = (ms) => {
+                const d = new Date(ms);
+                return d
+                    .toISOString()
+                    .replace("T", " ")
+                    .replace(/\.\d{3}Z$/, " UTC");
+            };
+
+            function rows(el, header, data, cols) {
+                el.innerHTML =
+                    `<tr>${header.map((h) => `<th>${h}</th>`).join("")}</tr>` +
+                    data
+                        .map(
+                            (r) =>
+                                `<tr>${cols.map((c) => `<td>${r[c] ?? ""}</td>`).join("")}</tr>`,
+                        )
+                        .join("");
+            }
+
+            async function refresh() {
+                const o = await get("overview");
+                const from = o.from ?? Date.now() - 7 * 24 * 3600 * 1000;
+                const to = o.to ?? Date.now();
+                const asOf = o.as_of ?? Date.now();
+                document.getElementById("meta").innerHTML =
+                    `window <time datetime="${new Date(from).toISOString()}">${fmtDay(from)}</time>` +
+                    ` → <time datetime="${new Date(to).toISOString()}">${fmtDay(to)}</time>` +
+                    ` · UTC · as of <time datetime="${new Date(asOf).toISOString()}">${fmtStamp(asOf)}</time>`;
+
+                document.getElementById("ov").innerHTML = [
+                    ["neurons", o.neurons],
+                    ["views", o.views],
+                    ["arrivals", o.arrivals],
+                    ["passages", o.passages],
+                    ["attention", fmt(o.attention_ms)],
+                    ["agents", o.agent_neurons],
+                ]
+                    .map(([k, v]) => `<div><b>${v}</b>${k}</div>`)
+                    .join("");
+
+                rows(
+                    document.getElementById("particles"),
+                    ["path", "views", "attention"],
+                    (await get("particles")).map((p) => ({
+                        ...p,
+                        attention_ms: fmt(p.attention_ms),
+                    })),
+                    ["pathname", "views", "attention_ms"],
+                );
+                rows(
+                    document.getElementById("sources"),
+                    ["source", "arrivals"],
+                    await get("sources"),
+                    ["source", "arrivals"],
+                );
+                rows(
+                    document.getElementById("channels"),
+                    ["channel", "arrivals"],
+                    await get("channels"),
+                    ["channel", "arrivals"],
+                );
+                const a = await get("actors");
+                document.getElementById("actors").innerHTML =
+                    `<tr><th>actor</th><th>neurons</th><th>views</th></tr>` +
+                    `<tr><td>human</td><td>${a.human.neurons}</td><td>${a.human.views}</td></tr>` +
+                    `<tr><td>agent</td><td>${a.agent.neurons}</td><td>${a.agent.views}</td></tr>` +
+                    (a.agent.declared || [])
+                        .map(
+                            (d) =>
+                                `<tr><td>· ${d.name}</td><td></td><td>${d.views}</td></tr>`,
+                        )
+                        .join("");
+            }
+
+            refresh();
+            setInterval(refresh, 5000);
+        </script>
+    </body>
 </html>

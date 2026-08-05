@@ -14,13 +14,13 @@ mod graph;
 mod reports;
 mod store;
 
+use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Json};
 use axum::routing::{delete, get, post};
-use axum::Router;
 use cybergraph::Cybergraph;
-use lytics_event::{event_hash, pow_verify, sig_verify, target_from_difficulty, Event};
+use lytics_event::{Event, event_hash, pow_verify, sig_verify, target_from_difficulty};
 use reports::Stored;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -149,7 +149,13 @@ fn ingest(
     // bbg's root is lazy now, so casting no longer recommits per insert —
     // it runs inline on the hot path again
     let page = graph::page_particle(&event.body.hostname, &event.body.pathname);
-    if let Err(e) = app.chains.cast(&mut app.cell, native, hash, page, event.body.timestamp / 1000) {
+    if let Err(e) = app.chains.cast(
+        &mut app.cell,
+        native,
+        hash,
+        page,
+        event.body.timestamp / 1000,
+    ) {
         eprintln!("cell cast failed for {hash_hex}: {e}");
     }
 
@@ -175,14 +181,26 @@ fn replay(app: &mut App) {
         }
     };
     for (_neuron, plaintext) in frames {
-        let Ok(stored) = serde_json::from_slice::<Stored>(&plaintext) else { continue };
-        let Ok(raw) = hex::decode(&stored.event_hash) else { continue };
-        let Ok(hash) = <[u8; 32]>::try_from(raw.as_slice()) else { continue };
+        let Ok(stored) = serde_json::from_slice::<Stored>(&plaintext) else {
+            continue;
+        };
+        let Ok(raw) = hex::decode(&stored.event_hash) else {
+            continue;
+        };
+        let Ok(hash) = <[u8; 32]>::try_from(raw.as_slice()) else {
+            continue;
+        };
         // native id for replay: hemera of the bech32 — a stable per-neuron
         // chain id (the pubkey lives only in the wire event)
         let native = *hemera::hash(stored.body.neuron.as_bytes()).as_bytes();
         let page = graph::page_particle(&stored.body.hostname, &stored.body.pathname);
-        let _ = app.chains.cast(&mut app.cell, native, hash, page, stored.body.timestamp / 1000);
+        let _ = app.chains.cast(
+            &mut app.cell,
+            native,
+            hash,
+            page,
+            stored.body.timestamp / 1000,
+        );
         app.seen.insert(hash);
         app.events.push(stored);
     }
@@ -197,7 +215,10 @@ async fn post_event(
     headers: HeaderMap,
     Json(event): Json<Event>,
 ) -> impl IntoResponse {
-    let ua = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(String::from);
+    let ua = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
     // first hop of x-forwarded-for when behind a proxy, else the peer
     let ip = headers
         .get("x-forwarded-for")
@@ -207,9 +228,11 @@ async fn post_event(
         .or(Some(peer.ip()));
     let mut app = state.lock().expect("lock");
     match ingest(&mut app, event, ua.as_deref(), ip) {
-        Ok((status, hash)) => {
-            (StatusCode::ACCEPTED, Json(json!({"status": status, "event": hash}))).into_response()
-        }
+        Ok((status, hash)) => (
+            StatusCode::ACCEPTED,
+            Json(json!({"status": status, "event": hash})),
+        )
+            .into_response(),
         Err(r) => r.respond().into_response(),
     }
 }
@@ -286,7 +309,15 @@ async fn get_report(
     let windowed = reports::in_window(&app.events, from, to);
 
     let out = match name.as_str() {
-        "overview" => reports::overview(&windowed),
+        "overview" => {
+            let mut o = reports::overview(&windowed);
+            if let Some(obj) = o.as_object_mut() {
+                obj.insert("from".into(), json!(from));
+                obj.insert("to".into(), json!(to));
+                obj.insert("as_of".into(), json!(now));
+            }
+            o
+        }
         "timeseries" => {
             let bucket = match q.get("bucket").map(String::as_str) {
                 Some("hour") => 3600 * 1000,
@@ -331,7 +362,13 @@ async fn demo() -> Html<&'static str> {
 /// serve a tracker asset. loader.js is source (embedded); the wasm core and
 /// its bindings are generated (read from disk, built by build-tracker.sh).
 async fn tracker_asset(Path(name): Path<String>) -> impl IntoResponse {
-    let mime = |n: &str| if n.ends_with(".wasm") { "application/wasm" } else { "text/javascript" };
+    let mime = |n: &str| {
+        if n.ends_with(".wasm") {
+            "application/wasm"
+        } else {
+            "text/javascript"
+        }
+    };
     let headers = |m: &'static str| {
         [
             (axum::http::header::CONTENT_TYPE, m),
@@ -339,7 +376,11 @@ async fn tracker_asset(Path(name): Path<String>) -> impl IntoResponse {
         ]
     };
     if name == "loader.js" {
-        return (headers("text/javascript"), include_str!("../static/tracker/loader.js")).into_response();
+        return (
+            headers("text/javascript"),
+            include_str!("../static/tracker/loader.js"),
+        )
+            .into_response();
     }
     if name == "lytics_core.js" || name == "lytics_core_bg.wasm" || name == "words.js" {
         let dir = std::env::var("LYTICS_STATIC")
@@ -347,8 +388,11 @@ async fn tracker_asset(Path(name): Path<String>) -> impl IntoResponse {
         match std::fs::read(format!("{dir}/{name}")) {
             Ok(bytes) => return (headers(mime(&name)), bytes).into_response(),
             Err(_) => {
-                return (StatusCode::NOT_FOUND, "tracker not built — run build-tracker.sh")
-                    .into_response()
+                return (
+                    StatusCode::NOT_FOUND,
+                    "tracker not built — run build-tracker.sh",
+                )
+                    .into_response();
             }
         }
     }
@@ -359,33 +403,23 @@ async fn tracker_asset(Path(name): Path<String>) -> impl IntoResponse {
 async fn main() {
     let env = |k: &str| std::env::var(k).ok();
     let data_dir = env("LYTICS_DATA").unwrap_or_else(|| "lytics-data".into());
-    let port: u16 = env("LYTICS_PORT").and_then(|p| p.parse().ok()).unwrap_or(8090);
+    let port: u16 = env("LYTICS_PORT")
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8090);
     let hrp = env("LYTICS_HRP").unwrap_or_else(|| "lytics".into());
-    let event_hashes: u64 =
-        env("LYTICS_EVENT_HASHES").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_EVENT_HASHES);
-    let enroll_mult: u64 =
-        env("LYTICS_ENROLL_MULT").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_ENROLL_MULT);
+    let event_hashes: u64 = env("LYTICS_EVENT_HASHES")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_EVENT_HASHES);
+    let enroll_mult: u64 = env("LYTICS_ENROLL_MULT")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_ENROLL_MULT);
     let owner_token = env("LYTICS_OWNER_TOKEN").unwrap_or_else(|| {
         let t = hex::encode(hemera::hash(format!("{}", now_ms()).as_bytes()).as_bytes());
         eprintln!("LYTICS_OWNER_TOKEN not set — generated: {t}");
         t
     });
 
-    let geo_db = env("LYTICS_GEO_DB")
-        .or_else(|| {
-            let local = "data/dbip-city-lite.mmdb";
-            std::path::Path::new(local).exists().then(|| local.to_string())
-        })
-        .and_then(|p| match geo::GeoDb::open(&p) {
-            Ok(db) => {
-                eprintln!("geo db loaded: {p}");
-                Some(db)
-            }
-            Err(e) => {
-                eprintln!("geo db unavailable ({p}): {e}");
-                None
-            }
-        });
+    let geo_db = geo::GeoDb::open_default();
 
     let store = store::Store::open(&data_dir).expect("store");
     let mut app = App {
@@ -431,7 +465,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lytics_event::{solve, Actor, EventBody, Kind, Navigation, Pow, Seed};
+    use lytics_event::{Actor, EventBody, Kind, Navigation, Pow, Seed, solve};
 
     const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
 
@@ -481,7 +515,15 @@ mod tests {
         let hash = event_hash(&body_bytes);
         let nonce = solve(&hash, target);
         let (pubkey, signature) = lytics_event::sign_body(n.signing_key(), &body_bytes, &n.bech32);
-        Event { body, pow: Pow { nonce, difficulty: target }, pubkey, signature }
+        Event {
+            body,
+            pow: Pow {
+                nonce,
+                difficulty: target,
+            },
+            pubkey,
+            signature,
+        }
     }
 
     #[test]
@@ -501,7 +543,10 @@ mod tests {
         let (status, _) = ingest(&mut app, ev2, None, None).unwrap();
         assert_eq!(status, "accepted");
         // attribution: chatgpt referral is the ai channel
-        assert!(matches!(app.events[0].attribution.channel, enrich::Channel::Ai));
+        assert!(matches!(
+            app.events[0].attribution.channel,
+            enrich::Channel::Ai
+        ));
     }
 
     #[test]
@@ -514,7 +559,10 @@ mod tests {
         let bytes = lytics_event::encode_body(&ev.body);
         let h = event_hash(&bytes);
         ev.pow.nonce = solve(&h, app.cfg.enroll_target);
-        assert!(matches!(ingest(&mut app, ev, None, None), Err(Reject::Auth(_))));
+        assert!(matches!(
+            ingest(&mut app, ev, None, None),
+            Err(Reject::Auth(_))
+        ));
     }
 
     #[test]
@@ -524,7 +572,10 @@ mod tests {
         app.cfg.enroll_target = 1;
         let seed = Seed::from_mnemonic(PHRASE).unwrap();
         let ev = signed_event(&seed, "/a", target_from_difficulty(4));
-        assert!(matches!(ingest(&mut app, ev, None, None), Err(Reject::Pow(_))));
+        assert!(matches!(
+            ingest(&mut app, ev, None, None),
+            Err(Reject::Pow(_))
+        ));
     }
 
     #[test]
@@ -533,6 +584,9 @@ mod tests {
         let seed = Seed::from_mnemonic(PHRASE).unwrap();
         let mut ev = signed_event(&seed, "/a", app.cfg.enroll_target);
         ev.body.timestamp = now_ms() + 10 * 60 * 1000;
-        assert!(matches!(ingest(&mut app, ev, None, None), Err(Reject::Bad(_))));
+        assert!(matches!(
+            ingest(&mut app, ev, None, None),
+            Err(Reject::Bad(_))
+        ));
     }
 }
