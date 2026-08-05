@@ -131,11 +131,11 @@
                     ` → <time datetime="${new Date(to).toISOString()}">${fmtDay(to)}</time>` +
                     ` · UTC · as of <time datetime="${new Date(asOf).toISOString()}">${fmtStamp(asOf)}</time>`;
 
+                // visits = passages (entry→next entry). arrivals stay internal.
                 document.getElementById("ov").innerHTML = [
                     ["neurons", o.neurons],
                     ["views", o.views],
-                    ["arrivals", o.arrivals],
-                    ["passages", o.passages],
+                    ["visits", o.visits],
                     ["attention", fmt(o.attention_ms)],
                     ["agents", o.agent_neurons],
                 ]
@@ -153,15 +153,21 @@
                 );
                 rows(
                     document.getElementById("sources"),
-                    ["source", "arrivals"],
-                    await get("sources"),
-                    ["source", "arrivals"],
+                    ["source", "visits"],
+                    (await get("sources")).map((r) => ({
+                        source: r.source,
+                        visits: r.visits ?? r.arrivals,
+                    })),
+                    ["source", "visits"],
                 );
                 rows(
                     document.getElementById("channels"),
-                    ["channel", "arrivals"],
-                    await get("channels"),
-                    ["channel", "arrivals"],
+                    ["channel", "visits"],
+                    (await get("channels")).map((r) => ({
+                        channel: r.channel,
+                        visits: r.visits ?? r.arrivals,
+                    })),
+                    ["channel", "visits"],
                 );
                 const a = await get("actors");
                 document.getElementById("actors").innerHTML =

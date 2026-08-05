@@ -37,8 +37,10 @@ impl Stored {
     /// carries utm. attribution attaches here.
     pub fn is_arrival(&self) -> bool {
         self.is_pageview()
-            && (matches!(self.body.navigation, Some(Navigation::External) | Some(Navigation::Direct))
-                || self.body.utm.is_some())
+            && (matches!(
+                self.body.navigation,
+                Some(Navigation::External) | Some(Navigation::Direct)
+            ) || self.body.utm.is_some())
     }
 
     pub fn attention_ms(&self) -> u64 {
@@ -47,7 +49,10 @@ impl Stored {
 }
 
 pub fn in_window<'a>(events: &'a [Stored], from: u64, to: u64) -> Vec<&'a Stored> {
-    events.iter().filter(|e| e.body.timestamp >= from && e.body.timestamp < to).collect()
+    events
+        .iter()
+        .filter(|e| e.body.timestamp >= from && e.body.timestamp < to)
+        .collect()
 }
 
 /// events grouped per neuron, ordered by timestamp.
@@ -74,10 +79,17 @@ impl Passage<'_> {
         self.events.iter().filter(|e| e.is_pageview()).count()
     }
     pub fn entry(&self) -> Option<&str> {
-        self.events.iter().find(|e| e.is_pageview()).map(|e| e.body.pathname.as_str())
+        self.events
+            .iter()
+            .find(|e| e.is_pageview())
+            .map(|e| e.body.pathname.as_str())
     }
     pub fn exit(&self) -> Option<&str> {
-        self.events.iter().rev().find(|e| e.is_pageview()).map(|e| e.body.pathname.as_str())
+        self.events
+            .iter()
+            .rev()
+            .find(|e| e.is_pageview())
+            .map(|e| e.body.pathname.as_str())
     }
 }
 
@@ -87,7 +99,9 @@ pub fn passages<'a>(events: &[&'a Stored]) -> Vec<Passage<'a>> {
         let mut current: Vec<&Stored> = Vec::new();
         for e in list {
             if e.is_arrival() && !current.is_empty() {
-                out.push(Passage { events: std::mem::take(&mut current) });
+                out.push(Passage {
+                    events: std::mem::take(&mut current),
+                });
             }
             current.push(e);
         }
@@ -99,27 +113,31 @@ pub fn passages<'a>(events: &[&'a Stored]) -> Vec<Passage<'a>> {
 }
 
 fn distinct_neurons(events: &[&Stored]) -> usize {
-    events.iter().map(|e| e.body.neuron.as_str()).collect::<BTreeSet<_>>().len()
+    events
+        .iter()
+        .map(|e| e.body.neuron.as_str())
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
 pub fn overview(events: &[&Stored]) -> serde_json::Value {
     let views = events.iter().filter(|e| e.is_pageview()).count();
     let attention: u64 = events.iter().map(|e| e.attention_ms()).sum();
-    let arrivals = events.iter().filter(|e| e.is_arrival()).count();
     let agents = events
         .iter()
         .filter(|e| e.body.actor == Actor::Agent)
         .map(|e| e.body.neuron.as_str())
         .collect::<BTreeSet<_>>()
         .len();
-    let p = passages(events);
+    // visit = passage (stream from one external entry to the next). arrivals
+    // stay an internal event label for attribution; the public count is visits.
+    let visits = passages(events).len();
     json!({
         "neurons": distinct_neurons(events),
         "views": views,
-        "arrivals": arrivals,
+        "visits": visits,
         "attention_ms": attention,
         "agent_neurons": agents,
-        "passages": p.len(),
     })
 }
 
@@ -167,7 +185,11 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
     for e in events {
         *attention.entry(e.body.pathname.clone()).or_default() += e.attention_ms();
     }
-    let rows = top_counts(events, |e| e.is_pageview().then(|| e.body.pathname.clone()), limit);
+    let rows = top_counts(
+        events,
+        |e| e.is_pageview().then(|| e.body.pathname.clone()),
+        limit,
+    );
     let out: Vec<_> = rows
         .into_iter()
         .map(|(path, pv)| {
@@ -180,24 +202,55 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
 
 pub fn sources(events: &[&Stored], limit: usize) -> serde_json::Value {
     let arrivals: Vec<&Stored> = events.iter().filter(|e| e.is_arrival()).copied().collect();
-    let rows = top_counts(&arrivals, |e| {
-        Some(e.attribution.source.clone().unwrap_or_else(|| "direct".into()))
-    }, limit);
-    json!(rows.into_iter().map(|(s, n)| json!({"source": s, "arrivals": n})).collect::<Vec<_>>())
+    let rows = top_counts(
+        &arrivals,
+        |e| {
+            Some(
+                e.attribution
+                    .source
+                    .clone()
+                    .unwrap_or_else(|| "direct".into()),
+            )
+        },
+        limit,
+    );
+    json!(
+        rows.into_iter()
+            .map(|(s, n)| json!({"source": s, "visits": n}))
+            .collect::<Vec<_>>()
+    )
 }
 
 pub fn channels(events: &[&Stored]) -> serde_json::Value {
     let arrivals: Vec<&Stored> = events.iter().filter(|e| e.is_arrival()).copied().collect();
-    let rows = top_counts(&arrivals, |e| Some(format!("{:?}", e.attribution.channel).to_lowercase()), 32);
-    json!(rows.into_iter().map(|(c, n)| json!({"channel": c, "arrivals": n})).collect::<Vec<_>>())
+    let rows = top_counts(
+        &arrivals,
+        |e| Some(format!("{:?}", e.attribution.channel).to_lowercase()),
+        32,
+    );
+    json!(
+        rows.into_iter()
+            .map(|(c, n)| json!({"channel": c, "visits": n}))
+            .collect::<Vec<_>>()
+    )
 }
 
 pub fn actors(events: &[&Stored]) -> serde_json::Value {
-    let humans: Vec<&Stored> =
-        events.iter().filter(|e| e.body.actor == Actor::Human).copied().collect();
-    let agents: Vec<&Stored> =
-        events.iter().filter(|e| e.body.actor == Actor::Agent).copied().collect();
-    let agent_names = top_counts(&agents, |e| e.body.agent.as_ref().map(|a| a.name.clone()), 16);
+    let humans: Vec<&Stored> = events
+        .iter()
+        .filter(|e| e.body.actor == Actor::Human)
+        .copied()
+        .collect();
+    let agents: Vec<&Stored> = events
+        .iter()
+        .filter(|e| e.body.actor == Actor::Agent)
+        .copied()
+        .collect();
+    let agent_names = top_counts(
+        &agents,
+        |e| e.body.agent.as_ref().map(|a| a.name.clone()),
+        16,
+    );
     json!({
         "human": {"neurons": distinct_neurons(&humans), "views": humans.iter().filter(|e| e.is_pageview()).count(), "attention_ms": humans.iter().map(|e| e.attention_ms()).sum::<u64>()},
         "agent": {"neurons": distinct_neurons(&agents), "views": agents.iter().filter(|e| e.is_pageview()).count(), "declared": agent_names.into_iter().map(|(n, c)| json!({"name": n, "views": c})).collect::<Vec<_>>()},
@@ -209,18 +262,26 @@ pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
     for e in events {
         if let Some(geo) = &e.geo {
             if let Some(c) = &geo.country {
-                neurons.entry(c.clone()).or_default().insert(e.body.neuron.as_str());
+                neurons
+                    .entry(c.clone())
+                    .or_default()
+                    .insert(e.body.neuron.as_str());
             }
         }
     }
-    let rows = top_counts(events, |e| e.geo.as_ref().and_then(|g| g.country.clone()), limit);
-    json!(rows
-        .into_iter()
-        .map(|(c, n)| {
-            let distinct = neurons.get(&c).map(|s| s.len()).unwrap_or(0);
-            json!({"country": c, "events": n, "neurons": distinct})
-        })
-        .collect::<Vec<_>>())
+    let rows = top_counts(
+        events,
+        |e| e.geo.as_ref().and_then(|g| g.country.clone()),
+        limit,
+    );
+    json!(
+        rows.into_iter()
+            .map(|(c, n)| {
+                let distinct = neurons.get(&c).map(|s| s.len()).unwrap_or(0);
+                json!({"country": c, "events": n, "neurons": distinct})
+            })
+            .collect::<Vec<_>>()
+    )
 }
 
 pub fn devices(events: &[&Stored], limit: usize) -> serde_json::Value {
@@ -241,7 +302,9 @@ const WEEK_MS: u64 = 7 * 24 * 3600 * 1000;
 pub fn retention(events: &[Stored], weeks: usize) -> serde_json::Value {
     let mut first_seen: BTreeMap<&str, u64> = BTreeMap::new();
     for e in events {
-        let entry = first_seen.entry(e.body.neuron.as_str()).or_insert(e.body.timestamp);
+        let entry = first_seen
+            .entry(e.body.neuron.as_str())
+            .or_insert(e.body.timestamp);
         if e.body.timestamp < *entry {
             *entry = e.body.timestamp;
         }
@@ -253,7 +316,12 @@ pub fn retention(events: &[Stored], weeks: usize) -> serde_json::Value {
         let cohort = first / WEEK_MS;
         let offset = e.body.timestamp / WEEK_MS - cohort;
         if (offset as usize) < weeks {
-            matrix.entry(cohort).or_default().entry(offset).or_default().insert(&e.body.neuron);
+            matrix
+                .entry(cohort)
+                .or_default()
+                .entry(offset)
+                .or_default()
+                .insert(&e.body.neuron);
         }
     }
     let rows: Vec<_> = matrix
@@ -286,11 +354,13 @@ pub fn funnel(events: &[&Stored], steps: &[String]) -> serde_json::Value {
             *slot += 1;
         }
     }
-    json!(steps
-        .iter()
-        .zip(reached)
-        .map(|(s, n)| json!({"step": s, "neurons": n}))
-        .collect::<Vec<_>>())
+    json!(
+        steps
+            .iter()
+            .zip(reached)
+            .map(|(s, n)| json!({"step": s, "neurons": n}))
+            .collect::<Vec<_>>()
+    )
 }
 
 /// return probability: of neurons first seen in [from, to), how many came
@@ -299,7 +369,9 @@ pub fn funnel(events: &[&Stored], steps: &[String]) -> serde_json::Value {
 pub fn returns(events: &[Stored], from: u64, to: u64, horizon_ms: u64) -> serde_json::Value {
     let mut first_seen: BTreeMap<&str, u64> = BTreeMap::new();
     for e in events {
-        let entry = first_seen.entry(e.body.neuron.as_str()).or_insert(e.body.timestamp);
+        let entry = first_seen
+            .entry(e.body.neuron.as_str())
+            .or_insert(e.body.timestamp);
         if e.body.timestamp < *entry {
             *entry = e.body.timestamp;
         }
@@ -337,7 +409,9 @@ pub fn passages_report(events: &[&Stored], limit: usize) -> serde_json::Value {
         let mut rows: Vec<_> = m.into_iter().collect();
         rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         rows.truncate(limit);
-        rows.into_iter().map(|(k, n)| json!({"pathname": k, "passages": n})).collect::<Vec<_>>()
+        rows.into_iter()
+            .map(|(k, n)| json!({"pathname": k, "passages": n}))
+            .collect::<Vec<_>>()
     };
     json!({
         "passages": total,
@@ -359,20 +433,35 @@ mod tests {
                 neuron: neuron.into(),
                 actor: Actor::Human,
                 agent: None,
-                kind: if att > 0 { Kind::Attention } else { Kind::Pageview },
+                kind: if att > 0 {
+                    Kind::Attention
+                } else {
+                    Kind::Pageview
+                },
                 navigation: nav,
                 hostname: "cyber.page".into(),
                 pathname: path.into(),
                 referrer: None,
                 utm: None,
-                attention: (att > 0).then_some(lytics_event::Attention { ms: att, scroll_depth: 0 }),
+                attention: (att > 0).then_some(lytics_event::Attention {
+                    ms: att,
+                    scroll_depth: 0,
+                }),
                 props: None,
                 revenue: None,
                 timestamp: ts,
             },
             event_hash: format!("{neuron}-{path}-{ts}"),
-            attribution: Attribution { source: None, channel: Channel::Direct },
-            device: Device { browser: None, browser_version: None, os: None, device: None },
+            attribution: Attribution {
+                source: None,
+                channel: Channel::Direct,
+            },
+            device: Device {
+                browser: None,
+                browser_version: None,
+                os: None,
+                device: None,
+            },
             geo: None,
             received_at: ts,
         }
@@ -383,9 +472,21 @@ mod tests {
         let events = vec![
             ev("n1", "/a", 1000, Some(Navigation::External), 0),
             // a six-hour pause — same passage, no timeout exists
-            ev("n1", "/b", 1000 + 6 * 3600 * 1000, Some(Navigation::Internal), 0),
+            ev(
+                "n1",
+                "/b",
+                1000 + 6 * 3600 * 1000,
+                Some(Navigation::Internal),
+                0,
+            ),
             // a new arrival — new passage
-            ev("n1", "/c", 1000 + 7 * 3600 * 1000, Some(Navigation::External), 0),
+            ev(
+                "n1",
+                "/c",
+                1000 + 7 * 3600 * 1000,
+                Some(Navigation::External),
+                0,
+            ),
         ];
         let refs: Vec<&Stored> = events.iter().collect();
         let p = passages(&refs);
@@ -399,7 +500,13 @@ mod tests {
     #[test]
     fn utm_pageview_is_arrival() {
         let mut e = ev("n1", "/a", 1, Some(Navigation::Internal), 0);
-        e.body.utm = Some(Utm { source: Some("nl".into()), medium: None, campaign: None, term: None, content: None });
+        e.body.utm = Some(Utm {
+            source: Some("nl".into()),
+            medium: None,
+            campaign: None,
+            term: None,
+            content: None,
+        });
         assert!(e.is_arrival());
     }
 
