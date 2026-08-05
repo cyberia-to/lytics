@@ -48,7 +48,7 @@ impl Stored {
     }
 }
 
-pub fn in_window<'a>(events: &'a [Stored], from: u64, to: u64) -> Vec<&'a Stored> {
+pub fn in_window(events: &[Stored], from: u64, to: u64) -> Vec<&Stored> {
     events
         .iter()
         .filter(|e| e.body.timestamp >= from && e.body.timestamp < to)
@@ -261,12 +261,8 @@ fn visit_breakdown<F: Fn(&Stored) -> String>(
     json!(
         rows.into_iter()
             .map(|(k, (visits, views, att))| {
-                let vpv_milli = if visits > 0 {
-                    (views * 1000) / visits
-                } else {
-                    0
-                };
-                let att_pv = if visits > 0 { att / visits } else { 0 };
+                let vpv_milli = (views * 1000).checked_div(visits).unwrap_or(0);
+                let att_pv = att.checked_div(visits).unwrap_or(0);
                 json!({
                     "key": k,
                     "source": k,
@@ -307,14 +303,13 @@ pub fn actors(events: &[&Stored]) -> serde_json::Value {
 pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
     let mut neurons: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
     for e in events {
-        if let Some(geo) = &e.geo {
-            if let Some(c) = &geo.country {
+        if let Some(geo) = &e.geo
+            && let Some(c) = &geo.country {
                 neurons
                     .entry(c.clone())
                     .or_default()
                     .insert(e.body.neuron.as_str());
             }
-        }
     }
     let rows = top_counts(
         events,
@@ -358,7 +353,7 @@ pub fn retention(events: &[Stored], weeks: usize) -> serde_json::Value {
     }
     // cohort week → offset → set of neurons
     let mut matrix: BTreeMap<u64, BTreeMap<u64, BTreeSet<&str>>> = BTreeMap::new();
-    for e in &*events {
+    for e in events {
         let first = first_seen[e.body.neuron.as_str()];
         let cohort = first / WEEK_MS;
         let offset = e.body.timestamp / WEEK_MS - cohort;
@@ -429,11 +424,10 @@ pub fn returns(events: &[Stored], from: u64, to: u64, horizon_ms: u64) -> serde_
         .collect();
     let mut returned: BTreeSet<&str> = BTreeSet::new();
     for e in events {
-        if let Some(first) = cohort.get(e.body.neuron.as_str()) {
-            if e.body.timestamp > *first && e.body.timestamp <= first + horizon_ms {
+        if let Some(first) = cohort.get(e.body.neuron.as_str())
+            && e.body.timestamp > *first && e.body.timestamp <= first + horizon_ms {
                 returned.insert(&e.body.neuron);
             }
-        }
     }
     json!({"cohort": cohort.len(), "returned": returned.len(), "horizon_ms": horizon_ms})
 }
@@ -516,7 +510,7 @@ mod tests {
 
     #[test]
     fn passages_split_on_arrivals_never_on_pauses() {
-        let events = vec![
+        let events = [
             ev("n1", "/a", 1000, Some(Navigation::External), 0),
             // a six-hour pause — same passage, no timeout exists
             ev(
@@ -559,7 +553,7 @@ mod tests {
 
     #[test]
     fn funnel_counts_ordered_prefixes() {
-        let events = vec![
+        let events = [
             ev("n1", "/a", 1, Some(Navigation::External), 0),
             ev("n1", "/b", 2, Some(Navigation::Internal), 0),
             ev("n2", "/a", 1, Some(Navigation::External), 0),
@@ -602,10 +596,8 @@ mod tests {
 
     #[test]
     fn attention_sums_into_overview() {
-        let events = vec![
-            ev("n1", "/a", 1, Some(Navigation::External), 0),
-            ev("n1", "/a", 2, None, 42_000),
-        ];
+        let events = [ev("n1", "/a", 1, Some(Navigation::External), 0),
+            ev("n1", "/a", 2, None, 42_000)];
         let refs: Vec<&Stored> = events.iter().collect();
         let o = overview(&refs);
         assert_eq!(o["attention_ms"], 42_000);
