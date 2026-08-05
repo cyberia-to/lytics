@@ -23,7 +23,7 @@ visitor browser                     server                       reader
 └─────────────────┘           │ cell (cybergraph)│              ▲
                               │  bbg state·time  │              │
                               │ query (inf)      │──────────────┘
-                              └──────────────────┘   HTTP /api/query
+                              └──────────────────┘   HTTP /api/report/*
 ```
 
 | component | language | role |
@@ -31,9 +31,9 @@ visitor browser                     server                       reader
 | loader | JS module, ~2 KB source | fires on page load, captures pageview + SPA route changes instantly, runs the attention sensor, queues events until the core is ready |
 | core | Rust → wasm, ~31 KB gzip / ~26 KB brotli measured | keygen, per-domain derivation, secp256k1 signing, PoW; loaded async so page performance never waits on crypto |
 | ingest | Rust, axum | signature + PoW verification, replay dedup, UA parsing, MaxMind geo (ip read, used, discarded), referrer→source attribution, adaptive difficulty, signal casting into the cell |
-| store | [[cybergraph]] cell + [[bbg]] | the ingest service embeds a cell in-process; events enter as signed signals, bbg holds the state and its time dimension indexes the stream |
-| query | [[inf]] datalog over bbg | timeseries, top-N, passages, retention, funnels — each report is one inf rule; the path is live: cybergraph already runs inf over bbg state in-process |
-| dashboard | Rust, Leptos + Trunk | wasm dashboard, d3 widgets, realtime by polling |
+| store | in-process event log, cast towards [[cybergraph]] cell + [[bbg]] | events enter signed and hash-addressed; the cell/bbg wiring for provable state is phase 6 — reports today read the ingest process's own log |
+| query | [[inf]] native (`inf-parse/plan/eval`) over a `LocalSource` built from the log | overview, timeseries, particles, actors, countries, devices, retention, returns are real inf rules today; sources, channels, passages and funnels stay hand-written Rust — they group by *passage*, and inf has no window/lag primitive to carry state across an ordered scan yet |
+| dashboard | static HTML + vanilla JS (`static/dash.html`) | polls the report endpoints, no build step; the Leptos/Trunk/d3 skeleton below was never built |
 
 the tracker splits in two on purpose: the loader guarantees plausible-grade
 capture latency and size; the wasm core carries the cryptography. events
@@ -251,9 +251,9 @@ visitor.
 
 | piece | source | how |
 |---|---|---|
-| query engine | [[inf]] native (`inf-parse/plan/eval`) | the implementation foundation — datalog over bbg, already wired via cybergraph `query()` |
+| query engine | [[inf]] native (`inf-parse/plan/eval`) | live: `inf_reports.rs` builds a `LocalSource` from the event log per request and answers 8 of 12 reports through real inf rules, each pinned to a Rust reference by a differential test |
 | datalog reference | `inf/rs/cozo` | reference only: behavior and api shapes to check against, never a dependency |
-| dashboard skeleton | `cyberstates` | Leptos + Trunk + d3, already deployed once |
+| dashboard | `static/dash.html` | plain HTML/JS, polling the report endpoints — no Leptos/Trunk build, shipped deliberately smaller |
 | tracker injection | `optica` `[analytics]` config | cyber.page pages already carry a snippet slot; point it at lytics |
 | referrer→source engine | plausible core (AGPL) + snowplow referer db | clean reimplementation in Rust; behavior parity, fresh code |
 | geo | `maxminddb` crate + GeoLite2 | same lookup plausible uses |
@@ -300,25 +300,29 @@ Rust client (canonical encoding + PoW + ADR-036) proving the API needs no
 browser. acceptance gate: sustain 100 events/s on one core with the cell
 embedded.
 
-### phase 3 — queries: the full report set (4 sessions)
+### phase 3 — queries: the full report set (4 sessions) — done, partially
 
-inf rules for: neurons/views/attention timeseries, top particles, sources,
-countries, devices, goals, custom props — and the identity-powered tier:
-retention matrix, cohorts, funnels, attention per arrival, return
-probability within a stated window. arrival and passage segmentation at
-read time. all engine arithmetic is integer and field-element ([[inf]]
-values are field elements; ratios render at the dashboard edge). where the
-report set needs primitives inf lacks today (count, group-by time bucket,
-top-N, ordered sequence match), extend inf itself, with behavior checked
-against the cozo reference. this phase lands the features plausible
-paywalls, because here they are one rule each.
+inf rules ship for: neurons/views/attention timeseries, top particles,
+countries, devices, actors, and the identity-powered tier's retention
+matrix and return probability within a stated window. all engine
+arithmetic is integer ([[inf]] has no floats; ratios render at the
+dashboard edge). differential tests pin every migrated report to the Rust
+implementation it replaced.
 
-### phase 4 — dashboard (3 sessions)
+sources, channels, passages and funnels stay hand-written Rust: they group
+by *passage*, which needs state carried across an ordered scan (an
+entry/exit/lag primitive), and inf's language has no window or lag
+construct today — verified directly against the evaluator, not assumed.
+extending inf with that primitive, behavior-checked against the cozo
+reference, is the remaining work in this phase.
 
-Leptos app from the cyberstates skeleton: period picker, comparison,
-realtime, the classic widgets (neurons, pages, sources, geo, devices,
-goals) recast on attention metrics, plus retention grid and funnel view.
-public dashboard links.
+### phase 4 — dashboard (3 sessions) — done, smaller than planned
+
+no Leptos app: `static/dash.html` is plain HTML/JS polling the report
+endpoints, deliberately — no build step, no wasm dashboard bundle on top
+of the tracker's own. period picker, the classic widgets (neurons,
+particles, sources, geo, devices) recast on attention metrics, retention
+grid. comparison view and public dashboard links are still open.
 
 ### phase 5 — integration + verification (1 session)
 
@@ -352,8 +356,8 @@ curl -s https://lytics.local/api/event -d @weak-pow.json        # → 429
 # a replayed event is idempotent
 curl -s https://lytics.local/api/event -d @signed-event.json   # → 202 again, counts unchanged
 
-# the premium tier answers
-echo '?[cohort, week, retained] := ...' | curl -s -d @- https://lytics.local/api/query
+# the premium tier answers — retention runs as a real inf rule, not a stub
+curl -s 'https://lytics.local/api/report/retention?weeks=8'
 
 # erasure destroys the neuron's data key
 curl -s -X DELETE https://lytics.local/api/neuron/<bech32>      # → 204, payloads unreadable
