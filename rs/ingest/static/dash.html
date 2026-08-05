@@ -107,9 +107,6 @@
         <h2>particles <small>pages</small></h2>
         <table id="particles"></table>
 
-        <h2>actors</h2>
-        <table id="actors"></table>
-
         <script>
             const root = location.pathname.replace(/\/?$/, "/");
             const get = (name, extra = "") =>
@@ -171,6 +168,8 @@
                 const bounce =
                     visits > 0 ? `${Math.round((spv / visits) * 100)}%` : "—";
 
+                // agents stay in the event model / API; not shown until
+                // declaration has a real web path (asAgent / agent clients).
                 document.getElementById("ov").innerHTML = [
                     ["neurons", o.neurons, "distinct keys"],
                     ["views", o.views, "pages seen"],
@@ -179,7 +178,6 @@
                     ["dwell", dwell, "attention / visit"],
                     ["1-page", bounce, `${spv} single-page visits`],
                     ["attention", fmt(o.attention_ms), "total looking"],
-                    ["agents", o.agent_neurons, "declared agents"],
                 ]
                     .map(
                         ([k, v, sub]) =>
@@ -252,18 +250,6 @@
                         ["attention_ms", "num"],
                     ],
                 );
-
-                const a = await get("actors");
-                document.getElementById("actors").innerHTML =
-                    `<tr><th>actor</th><th>neurons</th><th>views</th></tr>` +
-                    `<tr><td>human</td><td class="num">${a.human.neurons}</td><td class="num">${a.human.views}</td></tr>` +
-                    `<tr><td>agent</td><td class="num">${a.agent.neurons}</td><td class="num">${a.agent.views}</td></tr>` +
-                    (a.agent.declared || [])
-                        .map(
-                            (d) =>
-                                `<tr><td>· ${d.name}</td><td></td><td class="num">${d.views}</td></tr>`,
-                        )
-                        .join("");
             }
 
             refresh();
