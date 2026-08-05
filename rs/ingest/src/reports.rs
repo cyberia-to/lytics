@@ -7,8 +7,16 @@
 //!
 //! arrivals, passages and windows per the attention model — no sessions,
 //! no timeouts. all arithmetic is integer; ratios are rendered at the
-//! dashboard edge. phase 3 migrates these projections into inf rules; the
-//! function signatures are the contract that migration must keep.
+//! dashboard edge.
+//!
+//! `inf_reports` now answers most of these through real inf datalog; the
+//! Rust functions here stay as its differential-testing oracle (see
+//! `inf_reports.rs`'s module doc for exactly which reports migrated and
+//! which stay Rust because inf's language cannot express them yet —
+//! `sources`/`channels`/`passages`/`passages_report`/`funnel` roll up by
+//! *visit* (a passage), which needs an ordered scan inf has no primitive
+//! for. those, plus `overview`'s visit-derived fields, are still live —
+//! `main.rs` calls them directly.
 
 use crate::enrich::{Attribution, Device};
 use lytics_event::{Actor, EventBody, Kind, Navigation};
@@ -159,6 +167,9 @@ pub fn overview(events: &[&Stored]) -> serde_json::Value {
 }
 
 /// bucket ms: "hour" or "day".
+// migrated to inf_reports:: for the live route; kept here as the
+// differential-testing oracle inf_reports's tests compare against.
+#[allow(dead_code)]
 pub fn timeseries(events: &[&Stored], bucket_ms: u64) -> serde_json::Value {
     let mut buckets: BTreeMap<u64, (BTreeSet<&str>, u64, u64)> = BTreeMap::new();
     for e in events {
@@ -197,6 +208,9 @@ fn top_counts<'a, F: Fn(&&'a Stored) -> Option<String>>(
 /// top particles by views — each pathname is a particle (`graph::page_particle`
 /// hashes hostname+pathname); `pathname` here is the particle's human-readable
 /// name, not its hash.
+// migrated to inf_reports:: for the live route; kept here as the
+// differential-testing oracle inf_reports's tests compare against.
+#[allow(dead_code)]
 pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
     let mut attention: BTreeMap<String, u64> = BTreeMap::new();
     for e in events {
@@ -278,6 +292,9 @@ fn visit_breakdown<F: Fn(&Stored) -> String>(
     )
 }
 
+// migrated to inf_reports:: for the live route; kept here as the
+// differential-testing oracle inf_reports's tests compare against.
+#[allow(dead_code)]
 pub fn actors(events: &[&Stored]) -> serde_json::Value {
     let humans: Vec<&Stored> = events
         .iter()
@@ -300,6 +317,9 @@ pub fn actors(events: &[&Stored]) -> serde_json::Value {
     })
 }
 
+// migrated to inf_reports:: for the live route; kept here as the
+// differential-testing oracle inf_reports's tests compare against.
+#[allow(dead_code)]
 pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
     let mut neurons: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
     for e in events {
@@ -326,6 +346,9 @@ pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
     )
 }
 
+// migrated to inf_reports:: for the live route; kept here as the
+// differential-testing oracle inf_reports's tests compare against.
+#[allow(dead_code)]
 pub fn devices(events: &[&Stored], limit: usize) -> serde_json::Value {
     let browsers = top_counts(events, |e| e.device.browser.clone(), limit);
     let oses = top_counts(events, |e| e.device.os.clone(), limit);
@@ -341,6 +364,9 @@ const WEEK_MS: u64 = 7 * 24 * 3600 * 1000;
 
 /// retention matrix over ALL events (cohorts need full history):
 /// cohort week (first-seen) × week offset → distinct neurons active.
+// migrated to inf_reports:: for the live route; kept here as the
+// differential-testing oracle inf_reports's tests compare against.
+#[allow(dead_code)]
 pub fn retention(events: &[Stored], weeks: usize) -> serde_json::Value {
     let mut first_seen: BTreeMap<&str, u64> = BTreeMap::new();
     for e in events {
@@ -408,6 +434,9 @@ pub fn funnel(events: &[&Stored], steps: &[String]) -> serde_json::Value {
 /// return probability: of neurons first seen in [from, to), how many came
 /// back within `horizon_ms` after their first event. integers only —
 /// (returned, total) — the ratio renders at the edge.
+// migrated to inf_reports:: for the live route; kept here as the
+// differential-testing oracle inf_reports's tests compare against.
+#[allow(dead_code)]
 pub fn returns(events: &[Stored], from: u64, to: u64, horizon_ms: u64) -> serde_json::Value {
     let mut first_seen: BTreeMap<&str, u64> = BTreeMap::new();
     for e in events {

@@ -15,6 +15,14 @@ lytics-event.workspace = true
 cybergraph.workspace = true
 bbg.workspace = true
 hemera.workspace = true
+# the report engine: relations built from Vec<Stored> answered via real
+# inf datalog (LocalSource), not a bbg-backed source — bbg's canonical
+# dims carry no event fields (pathname/attention/referrer/actor)
+inf-value  = { path = "../../../inf/rs/value" }
+inf-source = { path = "../../../inf/rs/source" }
+inf-parse  = { path = "../../../inf/rs/parse" }
+inf-plan   = { path = "../../../inf/rs/plan" }
+inf-eval   = { path = "../../../inf/rs/eval" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
