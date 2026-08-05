@@ -16,10 +16,18 @@ use lytics_event::{
 };
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen(start)]
-pub fn start() {
-    console_error_panic_hook::set_once();
-}
+// single-threaded wasm → the tiny free-list allocator replaces dlmalloc.
+// the tracker allocates small short-lived strings; fragmentation is a
+// non-issue at this scale.
+#[cfg(target_arch = "wasm32")]
+#[global_allocator]
+static ALLOC: lol_alloc::AssumeSingleThreaded<lol_alloc::FreeListAllocator> =
+    unsafe { lol_alloc::AssumeSingleThreaded::new(lol_alloc::FreeListAllocator::new()) };
+
+// no panic hook: the production build panics with `immediate-abort` (a bare
+// trap, no formatting machinery) — a panic in the tracker is a bug surfaced
+// as RuntimeError in the console, and the native test suite carries the
+// readable messages.
 
 /// a per-domain tracker bound to one neuron. constructed from stored
 /// entropy (hex, persisted by the loader) plus the site domain.
@@ -46,10 +54,10 @@ impl Tracker {
     /// bind stored entropy (32-byte hex) to a domain.
     #[wasm_bindgen(constructor)]
     pub fn new(entropy_hex: &str, domain: &str, hrp: &str) -> Result<Tracker, String> {
-        let bytes = hex::decode(entropy_hex).map_err(|e| e.to_string())?;
+        let bytes = hex::decode(entropy_hex).map_err(|_| "entropy hex")?;
         let entropy: [u8; 32] = bytes.as_slice().try_into().map_err(|_| "entropy must be 32 bytes")?;
         let seed = Seed::from_entropy(entropy);
-        let neuron = seed.neuron(domain, hrp).map_err(|e| e.to_string())?;
+        let neuron = seed.neuron(domain, hrp).map_err(|_| "derivation")?;
         Ok(Tracker {
             bech32: neuron.bech32.clone(),
             pubkey_b64: base64_std(&neuron.pubkey),
@@ -85,7 +93,7 @@ impl Tracker {
         timestamp: f64,
         target: u64,
     ) -> Result<String, String> {
-        let neuron = self.seed.neuron(&self.domain, &self.hrp).map_err(|e| e.to_string())?;
+        let neuron = self.seed.neuron(&self.domain, &self.hrp).map_err(|_| "derivation")?;
         let kind = match kind {
             "pageview" => Kind::Pageview,
             "attention" => Kind::Attention,
@@ -130,11 +138,17 @@ impl Tracker {
         // wire event = canonical body object + pow + pubkey + signature.
         // pubkey/signature are base64 (JSON-safe alphabet), nonce/difficulty
         // written as integer literals so u64 stays exact across the boundary.
-        let mut wire = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+        let mut wire = String::from_utf8(bytes).map_err(|_| "utf8")?;
         wire.pop(); // drop the closing brace of the body object
-        wire.push_str(&format!(
-            r#","pow":{{"difficulty":{target},"nonce":{nonce}}},"pubkey":"{pubkey}","signature":"{signature}"}}"#
-        ));
+        wire.push_str(r#","pow":{"difficulty":"#);
+        lytics_event::push_u64_dec(&mut wire, target);
+        wire.push_str(r#","nonce":"#);
+        lytics_event::push_u64_dec(&mut wire, nonce);
+        wire.push_str(r#"},"pubkey":""#);
+        wire.push_str(&pubkey);
+        wire.push_str(r#"","signature":""#);
+        wire.push_str(&signature);
+        wire.push_str("\"}");
         Ok(wire)
     }
 }

@@ -18,7 +18,7 @@ visitor browser                     server                       reader
 ┌─────────────────┐   HTTPS   ┌──────────────────┐        ┌──────────────┐
 │ loader.js ~2KB  │  ───────► │ ingest (axum)    │        │ dashboard    │
 │  capture + queue│           │  verify sig+pow  │        │ leptos/trunk │
-│ core.wasm ~44KB │           │  ua · geo · ref  │  ───►  │  d3 widgets  │
+│ core.wasm ~27KB │           │  ua · geo · ref  │  ───►  │  d3 widgets  │
 │  keys·sign·pow  │           │  cast signal     │        └──────────────┘
 └─────────────────┘           │ cell (cybergraph)│              ▲
                               │  bbg state·time  │              │
@@ -29,7 +29,7 @@ visitor browser                     server                       reader
 | component | language | role |
 |---|---|---|
 | loader | JS module, ~2 KB source | fires on page load, captures pageview + SPA route changes instantly, runs the attention sensor, queues events until the core is ready |
-| core | Rust → wasm, ~53 KB gzip / ~44 KB brotli measured | keygen, per-domain derivation, secp256k1 signing, PoW; loaded async so page performance never waits on crypto |
+| core | Rust → wasm, ~32 KB gzip / ~27 KB brotli measured | keygen, per-domain derivation, secp256k1 signing, PoW; loaded async so page performance never waits on crypto |
 | ingest | Rust, axum | signature + PoW verification, replay dedup, UA parsing, MaxMind geo (ip read, used, discarded), referrer→source attribution, adaptive difficulty, signal casting into the cell |
 | store | [[cybergraph]] cell + [[bbg]] | the ingest service embeds a cell in-process; events enter as signed signals, bbg holds the state and its time dimension indexes the stream |
 | query | [[inf]] datalog over bbg | timeseries, top-N, passages, retention, funnels — each report is one inf rule; the path is live: cybergraph already runs inf over bbg state in-process |
@@ -48,8 +48,8 @@ stay in Rust — JS is confined to the bootstrap the platform requires and the
 sensor the platform exposes.
 
 on core size: the original ≤64 KB budget did not survive contact with the
-primitives, but five cuts brought the core from ~172 KB to ~53 KB gzip
-(~44 KB brotli):
+primitives, but eight cuts brought the core from ~172 KB gzip to ~32 KB gzip
+(~27 KB brotli):
 
 1. the 2048-word list left the hot path — the secret is raw 32-byte entropy,
    and the BIP39 mnemonic is a lazy backup in `words.js`, loaded only on
@@ -62,7 +62,15 @@ primitives, but five cuts brought the core from ~172 KB to ~53 KB gzip
 4. BIP32 gave way to a hemera KDF (`d = Hemera(entropy ‖ 0x00 ‖ domain) mod
    n`), dropping HMAC-SHA512 and bip32 — one hash where a derivation ladder
    was.
-5. `wasm-opt -Oz` ran over the result.
+5. the signing path dropped core::fmt — hand-written decimal and \u00XX
+   hex writers, static error strings.
+6. panics became `immediate-abort` (build-std): a panic is a bare trap, so
+   the whole panic/fmt machinery and its message strings left the binary —
+   the native test suite carries the readable messages.
+7. base64 and the allocator went hand-rolled/minimal (a ~40-line RFC 4648
+   codec pinned by parity tests; lol_alloc's free-list replaces dlmalloc —
+   the tracker is single-threaded and allocates small short-lived strings).
+8. `wasm-opt -Oz` ran over the result.
 
 what remains is the honest floor: secp256k1 signing (k256, now the largest
 piece) plus Poseidon2 (hemera, a mere ~3 KB) for the event hash, the KDF,
@@ -73,7 +81,7 @@ minimal secp256k1, or moving signing to `@noble/secp256k1` in JS (~4 KB,
 same curve) — deferred; the curve stays secp256k1 either way so the mudra
 bridge and on-chain identity hold.
 
-first-load transfer, measured: ~60 KB gzip / ~50 KB brotli total (wasm +
+first-load transfer, measured: ~41 KB gzip / ~34 KB brotli total (wasm +
 wasm-bindgen glue + loader), one time, then served from cache. the loader
 is a JS module; `words.js` (~6 KB brotli, the wordlist) transfers only when
 a visitor exports or imports their identity.

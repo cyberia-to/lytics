@@ -29,8 +29,8 @@ bip39 = { workspace = true, optional = true }
 sha2.workspace = true
 ripemd.workspace = true
 bech32.workspace = true
-base64.workspace = true
 getrandom.workspace = true
 
 [dev-dependencies]
 hex.workspace = true
+base64.workspace = true

@@ -139,7 +139,7 @@ impl ObjectWriter {
     }
     fn int(&mut self, k: &str, v: i64) {
         self.key(k);
-        self.buf.push_str(&v.to_string());
+        push_i64(&mut self.buf, v);
     }
     /// value already encoded as a JSON fragment (object / literal)
     fn raw(&mut self, k: &str, v: &str) {
@@ -149,6 +149,32 @@ impl ObjectWriter {
     fn finish(mut self) -> String {
         self.buf.push('}');
         self.buf
+    }
+}
+
+/// decimal writer without core::fmt — keeps the wasm free of pad_integral
+/// and friends on the signing path.
+pub fn push_u64_dec(out: &mut String, mut v: u64) {
+    let mut digits = [0u8; 20];
+    let mut at = digits.len();
+    loop {
+        at -= 1;
+        digits[at] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    // digits are ASCII by construction
+    out.push_str(std::str::from_utf8(&digits[at..]).expect("ascii"));
+}
+
+pub(crate) fn push_i64(out: &mut String, v: i64) {
+    if v < 0 {
+        out.push('-');
+        push_u64_dec(out, v.unsigned_abs());
+    } else {
+        push_u64_dec(out, v as u64);
     }
 }
 
@@ -167,7 +193,12 @@ pub(crate) fn escape_into(out: &mut String, s: &str) {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
+                // \u00XX by hand — no core::fmt on the signing path
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                let b = c as u32 as u8;
+                out.push_str("\\u00");
+                out.push(HEX[(b >> 4) as usize] as char);
+                out.push(HEX[(b & 0xf) as usize] as char);
             }
             c => out.push(c),
         }

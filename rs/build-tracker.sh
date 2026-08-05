@@ -13,8 +13,12 @@ cd "$(dirname "$0")"
 TC="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin"
 OUT=ingest/static/tracker
 
+# panic=immediate-abort + build-std: panics become bare traps and the whole
+# core::fmt/panic machinery is dead-code-eliminated (~12 KB brotli). needs
+# the rust-src component (rustup component add rust-src).
+RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort" \
 RUSTC="$TC/bin/rustc" ~/.cargo/bin/cargo +stable build \
-  -p lytics-core --target wasm32-unknown-unknown --release
+  -p lytics-core --target wasm32-unknown-unknown --release -Z build-std=std
 
 ~/.cargo/bin/wasm-bindgen --target web --no-typescript \
   --out-dir "$OUT" target/wasm32-unknown-unknown/release/lytics_core.wasm

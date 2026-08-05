@@ -8,13 +8,14 @@
 //! canonical encoding → hemera event hash → pow → adr-036 signature.
 //! spec: lytics/specs/README.md.
 
+pub mod b64;
 pub mod canonical;
 pub mod event;
 pub mod keys;
 pub mod pow;
 pub mod sign;
 
-pub use canonical::{encode_body, CanonicalError};
+pub use canonical::{encode_body, push_u64_dec, CanonicalError};
 #[cfg(feature = "json")]
 pub use canonical::canonical_json;
 pub use event::{Actor, AgentDecl, Attention, Event, EventBody, Kind, Navigation, Pow, Prop, Revenue};

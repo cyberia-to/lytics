@@ -9,7 +9,6 @@
 //! canonical body bytes as `sign/MsgSignData`. digest = sha256(doc),
 //! signature = secp256k1 compact (64 B).
 
-use base64::Engine;
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256};
@@ -28,11 +27,9 @@ pub enum SignError {
     SignerMismatch,
 }
 
-const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
-
 /// standard base64 — shared so the wasm core encodes pubkeys identically.
 pub fn b64_encode(bytes: &[u8]) -> String {
-    B64.encode(bytes)
+    crate::b64::encode(bytes)
 }
 
 /// the ADR-036 sign doc for a body, canonical-encoded. hand-written so the
@@ -43,7 +40,7 @@ fn sign_doc(body_bytes: &[u8], signer_bech32: &str) -> Vec<u8> {
     let mut s = String::from(
         r#"{"account_number":"0","chain_id":"","fee":{"amount":[],"gas":"0"},"memo":"","msgs":[{"type":"sign/MsgSignData","value":{"data":"#,
     );
-    crate::canonical::escape_into(&mut s, &B64.encode(body_bytes));
+    crate::canonical::escape_into(&mut s, &crate::b64::encode(body_bytes));
     s.push_str(r#","signer":"#);
     crate::canonical::escape_into(&mut s, signer_bech32);
     s.push_str(r#"}}],"sequence":"0"}"#);
@@ -60,7 +57,7 @@ pub fn sign_body(
     let digest = Sha256::digest(&doc);
     let sig: Signature = key.sign_prehash(&digest).expect("sign");
     let pubkey = key.verifying_key().to_encoded_point(true);
-    (B64.encode(pubkey.as_bytes()), B64.encode(sig.to_bytes()))
+    (crate::b64::encode(pubkey.as_bytes()), crate::b64::encode(&sig.to_bytes()))
 }
 
 /// verify a wire event's signature: pubkey must hash to the neuron field,
@@ -72,9 +69,8 @@ pub fn verify(
     signature_b64: &str,
     hrp: &str,
 ) -> Result<(), SignError> {
-    let pubkey_bytes = B64
-        .decode(pubkey_b64)
-        .map_err(|e| SignError::Base64(e.to_string()))?;
+    let pubkey_bytes =
+        crate::b64::decode(pubkey_b64).ok_or_else(|| SignError::Base64("pubkey".into()))?;
     let pubkey: [u8; 33] = pubkey_bytes
         .as_slice()
         .try_into()
@@ -84,9 +80,8 @@ pub fn verify(
     }
     let vk = VerifyingKey::from_sec1_bytes(&pubkey)
         .map_err(|e| SignError::Pubkey(e.to_string()))?;
-    let sig_bytes = B64
-        .decode(signature_b64)
-        .map_err(|e| SignError::Base64(e.to_string()))?;
+    let sig_bytes =
+        crate::b64::decode(signature_b64).ok_or_else(|| SignError::Base64("signature".into()))?;
     let sig = Signature::from_slice(&sig_bytes).map_err(|_| SignError::Invalid)?;
     let doc = sign_doc(body_bytes, neuron_bech32);
     let digest = Sha256::digest(&doc);

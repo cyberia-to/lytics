@@ -17,9 +17,12 @@ crate-type = ["cdylib", "rlib"]
 # default-features off → neither bip39/wordlist nor serde_json enter the wasm
 lytics-event = { path = "../event", default-features = false }
 wasm-bindgen = "=0.2.113"
-console_error_panic_hook = "0.1"
 getrandom = { version = "0.2", features = ["js"] }
 hex = "0.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# free-list allocator for single-threaded wasm — replaces dlmalloc (~5 KB)
+lol_alloc = "0.4"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
