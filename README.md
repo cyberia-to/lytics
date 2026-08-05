@@ -51,6 +51,15 @@ the market and inherits both failures:
 | funnels, revenue, sites api | proprietary — readable, unusable |
 | bot filtering | a 32k-IP blocklist — machine attention as enemy |
 
+the price, stated plainly: the tracker carries a keypair, signs every
+event, and solves a proof of work — that costs bytes. it ships ~26 KB of
+wasm (brotli), not plausible's 1.3 KB script. every one of those bytes
+buys something a stripped script cannot: identity that persists, a
+signature nothing can forge, and work priced instead of guessed at. it
+loads async and gates nothing — the loader captures the first pageview
+before the wasm even compiles — so the cost lands off the page's critical
+path, not on it. the full byte-by-byte account: [specs/](specs/README.md).
+
 lytics replaces the salt with a visitor-owned keypair and the blocklist
 with economics. one change closes both failures: stable identity makes the
 premium tier core; a [[costly signal]] on every event prices spam while
