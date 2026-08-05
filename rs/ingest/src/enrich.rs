@@ -117,10 +117,8 @@ fn medium_channel(medium: &str) -> Channel {
 
 /// attribute an event: utm wins, then referrer host, then direct/internal.
 pub fn attribute(body: &EventBody) -> Attribution {
-    if let Some(utm) = &body.utm {
-        if let Some(src) = &utm.source {
-            return Attribution { source: Some(src.clone()), channel: Channel::Campaign };
-        }
+    if let Some(src) = body.utm.as_ref().and_then(|utm| utm.source.as_ref()) {
+        return Attribution { source: Some(src.clone()), channel: Channel::Campaign };
     }
     let own = body.hostname.to_ascii_lowercase();
     let own = own.strip_prefix("www.").unwrap_or(&own);
