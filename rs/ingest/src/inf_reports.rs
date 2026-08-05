@@ -13,40 +13,52 @@
 //! `cybergraph::Cybergraph::query()` already makes against a bbg-backed
 //! source, here against a local one built from the payload log.
 //!
-//! what migrated and what stays Rust, honestly:
+//! every report is answered by inf now — there is no report left that runs
+//! as a hand-written Rust loop over the event stream in the release binary.
+//! `reports.rs` still holds a Rust implementation of each one, but every
+//! function there is `#[cfg(test)]`: it exists only to be compared against
+//! in this file's differential tests, and does not exist in a release build.
 //!
-//! - `overview`/`timeseries`/`particles`/`countries`/`devices`/`actors`/
-//!   `retention`/`returns` — every metric that is a plain count, sum, or
-//!   min/max over the raw event stream — run through inf below.
-//! - `overview`'s visit-derived fields (`visits`, `views_per_visit_milli`,
-//!   `attention_ms_per_visit`, `single_page_visits`) still come from
-//!   `reports::passages` — a visit IS a passage, and grouping events into
-//!   passages needs an ordered scan carrying state between consecutive
-//!   events (open a new group when an arrival breaks the run). inf's
-//!   language has no window/`lag` primitive today — `:sort` only orders
-//!   final output, it cannot feed a rule body — so passage-grouping cannot
-//!   be expressed as a datalog rule. this is a language gap, verified
-//!   directly against the evaluator, not a shortcut.
-//! - `sources`/`channels` stay Rust for the same reason: they roll up
-//!   views/attention per *visit* (`visit_breakdown` groups by passage, then
-//!   sums each passage's events) — downstream of the same passage
-//!   computation inf cannot express.
-//! - `passages`/`passages_report`/`funnel` are unchanged, already documented
-//!   in `reports.rs` as inf-inexpressible (ordered scan; dynamic-arity
-//!   ordered sequence match).
+//! the harder half of that is passage grouping (`sources`, `channels`,
+//! `passages`/`passages_report`, `overview`'s visit-derived fields). a
+//! passage is the run of a neuron's events from one arrival to the next —
+//! grouping into passages looks like it needs an ordered scan carrying state
+//! between consecutive events (inf has no window/`lag` primitive, and
+//! `:sort` only orders final output, confirmed directly against the
+//! evaluator). but a passage *boundary* is expressible without one: the
+//! passage id of an event is just the count of that neuron's arrivals
+//! strictly after its first-ever event and at-or-before this event's own
+//! timestamp — an inequality self-join + count, the same running-count
+//! trick `retention`/`returns` already used for cohort/offset math. see
+//! `passage_ids` for the derivation and `/tmp/infcheck3` (scratch, not
+//! committed) for where it was verified before being written here. `funnel`
+//! turned out to need no new trick at all: "does an increasing-timestamp
+//! subsequence exist" is what a chain of ordered existential joins already
+//! answers, and that is provably equivalent to the greedy single-pass scan
+//! the Rust reference used.
 //!
 //! relation schema built per call:
 //!
-//! - `events{neuron, pathname, ts, kind, ms, actor, agent_name}` — one row
-//!   per `Stored` event, always. `kind` is the wire kind string
+//! - `events{neuron, pathname, ts, kind, ms, actor, agent_name, arrival}` —
+//!   one row per `Stored` event, always. `kind` is the wire kind string
 //!   ("pageview"/"attention"/a custom name); `ms` is the attention
 //!   milliseconds (0 for non-attention events); `agent_name` is the
-//!   declared name or empty bytes.
+//!   declared name or empty bytes; `arrival` is "1"/"0" — a pageview whose
+//!   navigation is external/direct, or that carries utm.
+//! - `attrib_ev{neuron, ts, source, channel}` — one row per event, its own
+//!   attribution. `sources`/`channels` look this up by a passage's earliest
+//!   event, never by the passage's own key (there isn't one — a passage is
+//!   `(neuron, passage_id)`, not a row).
 //! - `geo_ev{neuron, country}`, `browser_ev{neuron, browser}`,
 //!   `os_ev{neuron, os}`, `class_ev{neuron, class}` — one row per event
 //!   that actually carries that optional field; events missing it are
 //!   skipped when the relation is built (in Rust, not in datalog), so no
 //!   query needs a null-check primitive.
+//! - `pid{neuron, ts, passage_id}`, `ev2{neuron, ts, kind, pathname, ms}` —
+//!   built by `passage_source` for every passage-grouped report: `pid` is
+//!   `passage_ids`' output, gap-filled to 0 for events with no qualifying
+//!   arrival; `ev2` restates `events` at the arity `PASSAGE_RULES` needs to
+//!   join back against.
 
 use crate::reports::Stored;
 use inf_eval::{eval, Ctx, EvalError, Output};
@@ -91,13 +103,33 @@ fn as_u64(v: &Value) -> u64 {
     as_i64(v).max(0) as u64
 }
 
+/// datalog string-literal escaping matching `inf-lex`'s reader exactly
+/// (`\` starts an escape, any following byte is taken literally except `n`
+/// and `t`) — needed wherever a value that did not originate in this
+/// module (a pathname from a query param, in `funnel`) is interpolated into
+/// a script string, or a crafted `"..).\n...` payload could inject clauses
+/// into the query it is meant to be mere data for.
+fn escape_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// build the base `events` relation from the event slice.
 fn events_source(events: &[&Stored]) -> LocalSource {
     let mut s = LocalSource::new();
     let rows: Vec<Tuple> = events
         .iter()
         .map(|e| {
-            let ms = e.body.attention.map(|a| a.ms as i64).unwrap_or(0);
+            let ms = e.attention_ms() as i64;
             let agent_name = e.body.agent.as_ref().map(|a| a.name.as_str()).unwrap_or("");
             vec![
                 Value::str(&e.body.neuron),
@@ -110,10 +142,40 @@ fn events_source(events: &[&Stored]) -> LocalSource {
                     lytics_event::Actor::Agent => "agent",
                 }),
                 Value::str(agent_name),
+                // arrival: a pageview whose navigation is external/direct, or
+                // that carries utm — the boundary a passage opens on. this is
+                // a per-event field derivation (same class as `kind`/`actor`
+                // above), not aggregation, so precomputing it in Rust from
+                // `Stored::is_arrival()` stays honest to "the query is inf's
+                // job" — the grouping/counting inf does with this column is
+                // the part that used to be a hand-rolled Rust loop.
+                Value::str(if e.is_arrival() { "1" } else { "0" }),
             ]
         })
         .collect();
-    s.add("events", &["neuron", "pathname", "ts", "kind", "ms", "actor", "agent_name"], rows);
+    s.add(
+        "events",
+        &["neuron", "pathname", "ts", "kind", "ms", "actor", "agent_name", "arrival"],
+        rows,
+    );
+
+    // one row per event (never filtered) carrying its own attribution — the
+    // key event of a passage (its earliest event) is looked up against this
+    // by (neuron, ts) to source a passage's `sources`/`channels` key. `ts`
+    // disambiguates for the same dedup-on-insert reason as the relations
+    // below.
+    let attrib_rows: Vec<Tuple> = events
+        .iter()
+        .map(|e| {
+            vec![
+                Value::str(&e.body.neuron),
+                Value::int(e.body.timestamp as i64),
+                Value::str(e.attribution.source.as_deref().unwrap_or("direct")),
+                Value::str(&format!("{:?}", e.attribution.channel).to_lowercase()),
+            ]
+        })
+        .collect();
+    s.add("attrib_ev", &["neuron", "ts", "source", "channel"], attrib_rows);
 
     // every filtered relation below carries `ts` even though most queries
     // never bind it — WITHOUT it, two real events from the same neuron with
@@ -162,6 +224,310 @@ fn events_source(events: &[&Stored]) -> LocalSource {
     s
 }
 
+/// per-event passage id (0-based within a neuron): the count of that
+/// neuron's arrivals strictly after its first-ever event and at-or-before
+/// this event's timestamp. a passage opens on every arrival except the
+/// stream's very first event (arrival or not) — which is exactly what "count
+/// of qualifying arrivals" gives: the first event always sees zero arrivals
+/// in `(first_ts, its own ts]` (the boundary is exclusive on the low end),
+/// and every later arrival raises the count for itself and everything after
+/// it, until the next one. this is the same inequality-self-join
+/// running-count trick `retention`/`returns` already use for cohort/offset —
+/// verified directly (see `/tmp/infcheck3`) before writing it here, not
+/// assumed: `inf` has no window/lag primitive, but a passage boundary is
+/// expressible as a count, so it never needed one.
+///
+/// events absent from the returned map are passage 0 (no arrival ever
+/// qualified) — callers must default missing keys to 0, not error.
+fn passage_ids(src: &LocalSource, events: &[&Stored]) -> BTreeMap<(String, i64), i64> {
+    let fs = match q(src, "?[neuron, min(ts)] := events{neuron, ts}") {
+        Ok(out) => out,
+        Err(_) => return BTreeMap::new(),
+    };
+    let mut s2 = LocalSource::new();
+    s2.add(
+        "fs",
+        &["neuron", "first"],
+        fs.rows.iter().map(|r| vec![r[0].clone(), r[1].clone()]).collect(),
+    );
+    let mut ts_ev: Vec<Tuple> = events
+        .iter()
+        .map(|e| vec![Value::str(&e.body.neuron), Value::int(e.body.timestamp as i64)])
+        .collect();
+    ts_ev.sort();
+    ts_ev.dedup();
+    s2.add("ts_ev", &["neuron", "ts"], ts_ev);
+    let arr_rows: Vec<Tuple> = events
+        .iter()
+        .filter(|e| e.is_arrival())
+        .map(|e| vec![Value::str(&e.body.neuron), Value::int(e.body.timestamp as i64)])
+        .collect();
+    s2.add("arrival_ev", &["neuron", "ts"], arr_rows);
+
+    let script = "mtc[neuron, ts, arrival_ts] := ts_ev{neuron, ts}, fs{neuron, first}, arrival_ev{neuron, ts: arrival_ts}, gt(arrival_ts, first), le(arrival_ts, ts)\n?[neuron, ts, count(arrival_ts)] := mtc[neuron, ts, arrival_ts]";
+    match q(&s2, script) {
+        Ok(out) => out
+            .rows
+            .iter()
+            .map(|r| ((as_str(&r[0]), as_i64(&r[1])), as_i64(&r[2])))
+            .collect(),
+        Err(_) => BTreeMap::new(),
+    }
+}
+
+/// build the passage-scoped source for a report call: `pid{neuron, ts,
+/// passage_id}` (every event, gap-filled to 0 — see `passage_ids`),
+/// `ev2{neuron, ts, kind, pathname, ms}` (every event again, full arity so
+/// the join back never loses a row), and `attrib_ev` carried over unchanged.
+/// every entry/exit/rollup query below joins against these three, never
+/// against raw Rust structures.
+fn passage_source(events: &[&Stored]) -> LocalSource {
+    let base = events_source(events);
+    let ids = passage_ids(&base, events);
+
+    let mut s = LocalSource::new();
+    let mut seen: std::collections::BTreeSet<(String, i64)> = std::collections::BTreeSet::new();
+    let mut pid_rows: Vec<Tuple> = Vec::new();
+    for e in events {
+        let key = (e.body.neuron.clone(), e.body.timestamp as i64);
+        if seen.insert(key.clone()) {
+            let pid = ids.get(&key).copied().unwrap_or(0);
+            pid_rows.push(vec![Value::str(&key.0), Value::int(key.1), Value::int(pid)]);
+        }
+    }
+    s.add("pid", &["neuron", "ts", "passage_id"], pid_rows);
+
+    let ev2_rows: Vec<Tuple> = events
+        .iter()
+        .map(|e| {
+            let ms = e.attention_ms() as i64;
+            vec![
+                Value::str(&e.body.neuron),
+                Value::int(e.body.timestamp as i64),
+                Value::str(&kind_str(&e.body.kind)),
+                Value::str(&e.body.pathname),
+                Value::int(ms),
+            ]
+        })
+        .collect();
+    s.add("ev2", &["neuron", "ts", "kind", "pathname", "ms"], ev2_rows);
+
+    let attrib_rows: Vec<Tuple> = events
+        .iter()
+        .map(|e| {
+            vec![
+                Value::str(&e.body.neuron),
+                Value::int(e.body.timestamp as i64),
+                Value::str(e.attribution.source.as_deref().unwrap_or("direct")),
+                Value::str(&format!("{:?}", e.attribution.channel).to_lowercase()),
+            ]
+        })
+        .collect();
+    s.add("attrib_ev", &["neuron", "ts", "source", "channel"], attrib_rows);
+
+    s
+}
+
+/// shared rule prefix every passage-rollup query below is built on:
+/// `vpq`/`apq` — views/attention summed per passage; `epath`/`xpath` — the
+/// pathname of a passage's earliest/latest pageview (entry/exit); `ksrc`/
+/// `kchan` — the source/channel of a passage's earliest event (the "key
+/// event" — see `reports::visit_breakdown`'s docstring for why that is
+/// always the passage's first event, never a later one). each final `?`
+/// query below re-sends this prefix — `q()` parses a fresh script per call,
+/// so named rules do not carry over between calls, same as `retention`'s
+/// two-stage shape.
+const PASSAGE_RULES: &str = r#"
+vpq[neuron, passage_id, count(pathname)] := pid{neuron, ts, passage_id}, ev2{neuron, ts, kind: "pageview", pathname}
+apq[neuron, passage_id, sum(ms)] := pid{neuron, ts, passage_id}, ev2{neuron, ts, kind: "attention", ms}
+et[neuron, passage_id, min(ts)] := pid{neuron, ts, passage_id}, ev2{neuron, ts, kind: "pageview"}
+epath[neuron, passage_id, pathname] := et[neuron, passage_id, entry_ts], ev2{neuron, ts: entry_ts, pathname}
+xt[neuron, passage_id, max(ts)] := pid{neuron, ts, passage_id}, ev2{neuron, ts, kind: "pageview"}
+xpath[neuron, passage_id, pathname] := xt[neuron, passage_id, exit_ts], ev2{neuron, ts: exit_ts, pathname}
+kt[neuron, passage_id, min(ts)] := pid{neuron, ts, passage_id}
+ksrc[neuron, passage_id, source] := kt[neuron, passage_id, key_ts], attrib_ev{neuron, ts: key_ts, source}
+kchan[neuron, passage_id, channel] := kt[neuron, passage_id, key_ts], attrib_ev{neuron, ts: key_ts, channel}
+"#;
+
+/// total passage count and total views-across-all-passages (the latter is
+/// just the overall pageview count restated, but computed the same way as
+/// everything else here: a query, not a field carried over from the caller).
+fn passages_totals(src: &LocalSource) -> (u64, u64) {
+    let total = scalar(
+        src,
+        "dpid[neuron, passage_id] := pid{neuron, ts, passage_id}\n?[count(passage_id)] := dpid[neuron, passage_id]",
+    ) as u64;
+    let views_total = scalar(src, r#"?[count(pathname)] := ev2{kind: "pageview", pathname}"#) as u64;
+    (total, views_total)
+}
+
+/// visit-derived counters for `overview`: visits (= total passages),
+/// views/attention per visit (integer milli-precision), and single-page
+/// visits — passages with at most one pageview, including passages with
+/// zero (a passage can be opened by a non-pageview custom event and never
+/// see one; the Rust reference this replaces counted those as "single-page"
+/// too, so this matches it exactly via `total - multi_page`, not
+/// `count(views <= 1)`, which `vpq` cannot express for the zero case since a
+/// zero-view passage has no `vpq` row at all).
+fn visit_metrics(events: &[&Stored], views: u64, attention_ms: u64) -> serde_json::Value {
+    let src = passage_source(events);
+    let (visits, _) = passages_totals(&src);
+    let multi_page = scalar(
+        &src,
+        &format!(
+            "{PASSAGE_RULES}many[neuron, passage_id] := vpq[neuron, passage_id, views], gt(views, 1)\n?[count(passage_id)] := many[neuron, passage_id]"
+        ),
+    ) as u64;
+    let single_page_visits = visits.saturating_sub(multi_page);
+    let views_per_visit_milli = views.checked_mul(1000).and_then(|v| v.checked_div(visits)).unwrap_or(0);
+    let attention_ms_per_visit = attention_ms.checked_div(visits).unwrap_or(0);
+    json!({
+        "visits": visits,
+        "views_per_visit_milli": views_per_visit_milli,
+        "attention_ms_per_visit": attention_ms_per_visit,
+        "single_page_visits": single_page_visits,
+    })
+}
+
+/// entries/exits by pathname (top-N) plus passage/view totals — the
+/// `passages` report.
+pub fn passages_report(events: &[&Stored], limit: usize) -> serde_json::Value {
+    let src = passage_source(events);
+    let (total, views_total) = passages_totals(&src);
+
+    let top_by_pathname = |script: &str| -> Vec<serde_json::Value> {
+        let full = format!("{PASSAGE_RULES}{script}");
+        let mut rows: Vec<(String, u64)> = q(&src, &full)
+            .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+            .unwrap_or_default();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        rows.truncate(limit);
+        rows.into_iter().map(|(k, n)| json!({"pathname": k, "passages": n})).collect()
+    };
+    let entries = top_by_pathname("?[pathname, count(passage_id)] := epath[neuron, passage_id, pathname]");
+    let exits = top_by_pathname("?[pathname, count(passage_id)] := xpath[neuron, passage_id, pathname]");
+
+    json!({
+        "passages": total,
+        "views_total": views_total,
+        "entries": entries,
+        "exits": exits,
+    })
+}
+
+/// visits grouped by a passage's key-event source or channel, with views +
+/// attention rolled up per group. `rel`/`col` select `ksrc`/"source" or
+/// `kchan`/"channel"; visits/views/attention are three independent queries
+/// (not one three-way join) because a passage missing from `vpq` (no
+/// pageview) or `apq` (no attention) must contribute 0, not drop out of an
+/// inner join — same reasoning `timeseries` already applies by merging three
+/// separate bucketed queries in Rust instead of one.
+fn visit_breakdown(src: &LocalSource, rel: &str, col: &str, limit: usize) -> serde_json::Value {
+    let visits: BTreeMap<String, u64> = q(
+        src,
+        &format!("{PASSAGE_RULES}?[{col}, count(passage_id)] := {rel}[neuron, passage_id, {col}]"),
+    )
+    .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+    .unwrap_or_default();
+    let views: BTreeMap<String, u64> = q(
+        src,
+        &format!(
+            "{PASSAGE_RULES}?[{col}, sum(views)] := {rel}[neuron, passage_id, {col}], vpq[neuron, passage_id, views]"
+        ),
+    )
+    .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+    .unwrap_or_default();
+    let attn: BTreeMap<String, u64> = q(
+        src,
+        &format!(
+            "{PASSAGE_RULES}?[{col}, sum(ms)] := {rel}[neuron, passage_id, {col}], apq[neuron, passage_id, ms]"
+        ),
+    )
+    .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+    .unwrap_or_default();
+
+    let mut rows: Vec<_> = visits
+        .iter()
+        .map(|(k, v)| {
+            let views = views.get(k).copied().unwrap_or(0);
+            let att = attn.get(k).copied().unwrap_or(0);
+            let vpv_milli = views.checked_mul(1000).and_then(|x| x.checked_div(*v)).unwrap_or(0);
+            let att_pv = att.checked_div(*v).unwrap_or(0);
+            (k.clone(), *v, views, att, vpv_milli, att_pv)
+        })
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    rows.truncate(limit);
+    json!(rows
+        .into_iter()
+        .map(|(k, visits, views, att, vpv_milli, att_pv)| json!({
+            "key": k,
+            "source": k,
+            "channel": k,
+            "visits": visits,
+            "views": views,
+            "attention_ms": att,
+            "views_per_visit_milli": vpv_milli,
+            "attention_ms_per_visit": att_pv,
+        }))
+        .collect::<Vec<_>>())
+}
+
+pub fn sources(events: &[&Stored], limit: usize) -> serde_json::Value {
+    let src = passage_source(events);
+    visit_breakdown(&src, "ksrc", "source", limit)
+}
+
+pub fn channels(events: &[&Stored]) -> serde_json::Value {
+    let src = passage_source(events);
+    visit_breakdown(&src, "kchan", "channel", 32)
+}
+
+/// ordered funnel: neurons reaching each prefix of `steps`, in order.
+/// existence of an increasing-timestamp assignment to a chain of ordered
+/// existential joins is equivalent to the greedy single-pass subsequence
+/// scan the Rust reference used — a passing greedy scan always exists
+/// exactly when a matching (not-necessarily-greedy) subsequence exists, so
+/// `sK[neuron, tK] := s(K-1)[..], events{pathname: "<stepK>", ...}, gt(tK,
+/// t(K-1))` chained K times reproduces it exactly.
+///
+/// step pathnames come straight from a query param — `escape_str` is load-
+/// bearing here, not decoration: without it a pathname containing `"` could
+/// close the string literal and inject clauses into the script text.
+pub fn funnel(events: &[&Stored], steps: &[String]) -> serde_json::Value {
+    if steps.is_empty() {
+        return json!([]);
+    }
+    let src = events_source(events);
+    let mut prefix = String::new();
+    let mut counts = Vec::with_capacity(steps.len());
+    for (i, step) in steps.iter().enumerate() {
+        let rel = format!("s{i}");
+        let esc = escape_str(step);
+        if i == 0 {
+            prefix.push_str(&format!(
+                "{rel}[neuron, t{i}] := events{{kind: \"pageview\", pathname: \"{esc}\", neuron, ts: t{i}}}\n"
+            ));
+        } else {
+            let prev = format!("s{}", i - 1);
+            prefix.push_str(&format!(
+                "{rel}[neuron, t{i}] := {prev}[neuron, t{}], events{{kind: \"pageview\", pathname: \"{esc}\", neuron, ts: t{i}}}, gt(t{i}, t{})\n",
+                i - 1,
+                i - 1
+            ));
+        }
+        let script = format!(
+            "{prefix}dn[neuron] := {rel}[neuron, t{i}]\n?[count(neuron)] := dn[neuron]"
+        );
+        counts.push(scalar(&src, &script) as u64);
+    }
+    json!(steps
+        .iter()
+        .zip(counts)
+        .map(|(s, n)| json!({"step": s, "neurons": n}))
+        .collect::<Vec<_>>())
+}
+
 /// scalar helper: run a query expected to return exactly one row, one column.
 fn scalar(src: &LocalSource, script: &str) -> i64 {
     match q(src, script) {
@@ -189,6 +555,22 @@ pub fn overview_counts(events: &[&Stored]) -> serde_json::Value {
         "attention_ms": attention,
         "agent_neurons": agent_neurons,
     })
+}
+
+/// the full `overview` report: plain counts plus visit-derived fields, both
+/// answered by inf — see `visit_metrics` for why the passage-grouping half
+/// of this needed its own relation pipeline rather than a filter on `events`.
+pub fn overview(events: &[&Stored]) -> serde_json::Value {
+    let mut o = overview_counts(events);
+    let views = o["views"].as_u64().unwrap_or(0);
+    let attention = o["attention_ms"].as_u64().unwrap_or(0);
+    let visits = visit_metrics(events, views, attention);
+    if let (Some(obj), Some(v)) = (o.as_object_mut(), visits.as_object()) {
+        for (k, val) in v {
+            obj.insert(k.clone(), val.clone());
+        }
+    }
+    o
 }
 
 /// bucket ms: e.g. 3_600_000 (hour) or 86_400_000 (day).
@@ -496,8 +878,17 @@ mod tests {
     fn pv(neuron: &str, path: &str, ts: u64) -> Stored {
         ev(neuron, path, ts, Kind::Pageview, Some(Navigation::External), 0, Actor::Human, None)
     }
+    /// an internal-navigation pageview — not an arrival, stays inside the
+    /// current passage.
+    fn pv_internal(neuron: &str, path: &str, ts: u64) -> Stored {
+        ev(neuron, path, ts, Kind::Pageview, Some(Navigation::Internal), 0, Actor::Human, None)
+    }
     fn attn(neuron: &str, path: &str, ts: u64, ms: u64) -> Stored {
         ev(neuron, path, ts, Kind::Attention, None, ms, Actor::Human, None)
+    }
+    fn with_attrib(mut s: Stored, source: Option<&str>, channel: Channel) -> Stored {
+        s.attribution = Attribution { source: source.map(String::from), channel };
+        s
     }
     fn with_geo(mut s: Stored, country: &str) -> Stored {
         s.geo = Some(Geo { country: Some(country.into()), region: None, city: None });
@@ -724,5 +1115,139 @@ mod tests {
         let inf = returns(&events, 0, 1000, 500);
         assert_eq!(inf, reference);
         assert_eq!(inf["returned"], 0);
+    }
+
+    #[test]
+    fn passage_ids_open_new_passage_only_on_arrival_after_the_first_event() {
+        // n1: arrival /a (passage 0), internal /b (still 0), arrival /c
+        // (passage 1), internal /d (still 1). n2: internal /x as the very
+        // first event ever — passage 0 despite not being an arrival.
+        let events = vec![
+            pv("n1", "/a", 0),
+            pv_internal("n1", "/b", 200),
+            pv("n1", "/c", 300),
+            pv_internal("n1", "/d", 400),
+            pv_internal("n2", "/x", 50),
+        ];
+        let r = refs(&events);
+        let src = events_source(&r);
+        let ids = passage_ids(&src, &r);
+        assert_eq!(ids.get(&("n1".into(), 300)).copied(), Some(1));
+        assert_eq!(ids.get(&("n1".into(), 400)).copied(), Some(1));
+        // ts=0, 200 and n2's 50 qualify for zero arrivals — absent, defaults to 0
+        assert_eq!(ids.get(&("n1".into(), 0)), None);
+        assert_eq!(ids.get(&("n1".into(), 200)), None);
+        assert_eq!(ids.get(&("n2".into(), 50)), None);
+    }
+
+    #[test]
+    fn passages_report_matches_reference() {
+        let events = vec![
+            pv("n1", "/a", 1000),
+            pv_internal("n1", "/b", 1000 + 6 * 3600 * 1000), // six-hour pause, same passage
+            pv("n1", "/c", 1000 + 7 * 3600 * 1000),          // new arrival, new passage
+            pv("n2", "/a", 500),
+        ];
+        let r = refs(&events);
+        let reference = crate::reports::passages_report(&r, 10);
+        let inf = passages_report(&r, 10);
+        assert_eq!(inf, reference);
+        assert_eq!(inf["passages"], 3); // n1: 2 passages, n2: 1
+        assert_eq!(inf["views_total"], 4);
+    }
+
+    #[test]
+    fn sources_matches_reference() {
+        let events = vec![
+            with_attrib(pv("n1", "/a", 1000), Some("google"), Channel::Search),
+            pv_internal("n1", "/b", 1100), // same passage — key stays google/search
+            attn("n1", "/a", 1150, 2000),
+            with_attrib(pv("n2", "/a", 1200), Some("google"), Channel::Search),
+            with_attrib(pv("n3", "/a", 1300), None, Channel::Direct),
+        ];
+        let r = refs(&events);
+        let reference = crate::reports::sources(&r, 10);
+        let inf = sources(&r, 10);
+        assert_eq!(inf, reference);
+        let arr = inf.as_array().unwrap();
+        let google = arr.iter().find(|row| row["source"] == "google").unwrap();
+        assert_eq!(google["visits"], 2);
+        assert_eq!(google["views"], 3); // n1's passage has 2 views, n2's has 1
+        assert_eq!(google["attention_ms"], 2000);
+        let direct = arr.iter().find(|row| row["source"] == "direct").unwrap();
+        assert_eq!(direct["visits"], 1);
+    }
+
+    #[test]
+    fn channels_matches_reference() {
+        let events = vec![
+            with_attrib(pv("n1", "/a", 1000), Some("google"), Channel::Search),
+            with_attrib(pv("n2", "/a", 1100), None, Channel::Direct),
+            with_attrib(pv("n3", "/a", 1200), None, Channel::Direct),
+        ];
+        let r = refs(&events);
+        let reference = crate::reports::channels(&r);
+        let inf = channels(&r);
+        assert_eq!(inf, reference);
+        let arr = inf.as_array().unwrap();
+        let direct = arr.iter().find(|row| row["channel"] == "direct").unwrap();
+        assert_eq!(direct["visits"], 2);
+    }
+
+    #[test]
+    fn funnel_matches_reference() {
+        let events = vec![
+            pv("n1", "/a", 1),
+            pv_internal("n1", "/b", 2),
+            pv("n2", "/a", 1),
+            pv("n3", "/b", 1), // out of order: /b before /a — never reaches step 1
+        ];
+        let r = refs(&events);
+        let steps = vec!["/a".to_string(), "/b".to_string()];
+        let reference = crate::reports::funnel(&r, &steps);
+        let inf = funnel(&r, &steps);
+        assert_eq!(inf, reference);
+        let rows = inf.as_array().unwrap();
+        assert_eq!(rows[0]["neurons"], 2); // n1, n2
+        assert_eq!(rows[1]["neurons"], 1); // only n1
+    }
+
+    #[test]
+    fn funnel_escapes_quotes_in_step_pathnames() {
+        // a pathname carrying a `"` must not be able to close the string
+        // literal and inject a clause — if it did, this would either panic,
+        // error, or (worse) silently match every pageview.
+        let events = vec![pv("n1", "/normal", 1)];
+        let r = refs(&events);
+        let steps = vec![r#"/a" }, events{ts: 1} #"#.to_string()];
+        let out = funnel(&r, &steps);
+        assert_eq!(out[0]["neurons"], 0);
+    }
+
+    #[test]
+    fn overview_matches_reference() {
+        let events = vec![
+            pv("n1", "/a", 1000),
+            attn("n1", "/a", 1100, 5000),
+            pv_internal("n1", "/b", 1200), // same passage as /a
+            pv("n2", "/a", 1300),          // single-page visit
+            ev("n3", "/c", 1400, Kind::Pageview, Some(Navigation::External), 0, Actor::Agent, Some("bot")),
+        ];
+        let r = refs(&events);
+        let reference = crate::reports::overview(&r);
+        let inf = overview(&r);
+        assert_eq!(inf, reference);
+        assert_eq!(inf["visits"], 3); // n1: 1 passage, n2: 1, n3: 1
+        assert_eq!(inf["single_page_visits"], 2); // n2 and n3, not n1 (2 views)
+    }
+
+    #[test]
+    fn overview_matches_reference_on_empty() {
+        let events: Vec<Stored> = vec![];
+        let r = refs(&events);
+        let reference = crate::reports::overview(&r);
+        let inf = overview(&r);
+        assert_eq!(inf, reference);
+        assert_eq!(inf["visits"], 0);
     }
 }

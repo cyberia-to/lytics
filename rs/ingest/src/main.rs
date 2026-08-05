@@ -309,24 +309,15 @@ async fn get_report(
     let limit = parse_u64("limit", 10) as usize;
     let windowed = reports::in_window(&app.events, from, to);
 
-    // overview/timeseries/particles/actors/countries/devices/retention/returns
-    // run through real inf datalog (inf_reports) — a fresh LocalSource built
-    // from the same event slice, answered by parse→plan→eval. sources/
-    // channels/passages/funnel stay on reports:: — they roll up by *visit*
-    // (a passage), and passage-grouping needs an ordered scan inf's language
-    // cannot express today (documented in inf_reports.rs).
+    // every report is answered by inf_reports:: — a fresh LocalSource built
+    // from the same event slice, answered by parse→plan→eval. reports.rs's
+    // matching functions still exist, but only under #[cfg(test)]: they are
+    // the differential-testing oracle inf_reports's tests compare against,
+    // never a fallback the release binary can reach.
     let out = match name.as_str() {
         "overview" => {
-            // base: the Rust visit-derived fields (visits, depth, dwell,
-            // bounce) this module cannot compute — then overwrite the plain
-            // counts with the inf-computed values, so every counted field
-            // genuinely comes from a datalog query.
-            let mut o = reports::overview(&windowed);
-            let counts = inf_reports::overview_counts(&windowed);
-            if let (Some(obj), Some(counts)) = (o.as_object_mut(), counts.as_object()) {
-                for (k, v) in counts {
-                    obj.insert(k.clone(), v.clone());
-                }
+            let mut o = inf_reports::overview(&windowed);
+            if let Some(obj) = o.as_object_mut() {
                 obj.insert("from".into(), json!(from));
                 obj.insert("to".into(), json!(to));
                 obj.insert("as_of".into(), json!(now));
@@ -341,12 +332,12 @@ async fn get_report(
             inf_reports::timeseries(&windowed, bucket)
         }
         "particles" => inf_reports::particles(&windowed, limit),
-        "sources" => reports::sources(&windowed, limit),
-        "channels" => reports::channels(&windowed),
+        "sources" => inf_reports::sources(&windowed, limit),
+        "channels" => inf_reports::channels(&windowed),
         "actors" => inf_reports::actors(&windowed),
         "devices" => inf_reports::devices(&windowed, limit),
         "countries" => inf_reports::countries(&windowed, limit),
-        "passages" => reports::passages_report(&windowed, limit),
+        "passages" => inf_reports::passages_report(&windowed, limit),
         "retention" => inf_reports::retention(&app.events, parse_u64("weeks", 8) as usize),
         "returns" => inf_reports::returns(
             &app.events,
@@ -359,7 +350,7 @@ async fn get_report(
                 .get("steps")
                 .map(|s| s.split(',').map(String::from).collect())
                 .unwrap_or_default();
-            reports::funnel(&windowed, &steps)
+            inf_reports::funnel(&windowed, &steps)
         }
         _ => return (StatusCode::NOT_FOUND, "unknown report").into_response(),
     };

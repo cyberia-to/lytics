@@ -32,7 +32,7 @@ visitor browser                     server                       reader
 | core | Rust → wasm, ~31 KB gzip / ~26 KB brotli measured | keygen, per-domain derivation, secp256k1 signing, PoW; loaded async so page performance never waits on crypto |
 | ingest | Rust, axum | signature + PoW verification, replay dedup, UA parsing, MaxMind geo (ip read, used, discarded), referrer→source attribution, adaptive difficulty, signal casting into the cell |
 | store | in-process event log, cast towards [[cybergraph]] cell + [[bbg]] | events enter signed and hash-addressed; the cell/bbg wiring for provable state is phase 6 — reports today read the ingest process's own log |
-| query | [[inf]] native (`inf-parse/plan/eval`) over a `LocalSource` built from the log | overview, timeseries, particles, actors, countries, devices, retention, returns are real inf rules today; sources, channels, passages and funnels stay hand-written Rust — they group by *passage*, and inf has no window/lag primitive to carry state across an ordered scan yet |
+| query | [[inf]] native (`inf-parse/plan/eval`) over a `LocalSource` built from the log | every report — including sources, channels, passages and funnels, which group by *passage* — is a real inf rule; no report answers from a Rust loop over the event stream in the release binary |
 | dashboard | static HTML + vanilla JS (`static/dash.html`) | polls the report endpoints, no build step; the Leptos/Trunk/d3 skeleton below was never built |
 
 the tracker splits in two on purpose: the loader guarantees plausible-grade
@@ -251,7 +251,7 @@ visitor.
 
 | piece | source | how |
 |---|---|---|
-| query engine | [[inf]] native (`inf-parse/plan/eval`) | live: `inf_reports.rs` builds a `LocalSource` from the event log per request and answers 8 of 12 reports through real inf rules, each pinned to a Rust reference by a differential test |
+| query engine | [[inf]] native (`inf-parse/plan/eval`) | live: `inf_reports.rs` builds a `LocalSource` from the event log per request and answers every report through real inf rules, each pinned to a `#[cfg(test)]`-only Rust reference by a differential test |
 | datalog reference | `inf/rs/cozo` | reference only: behavior and api shapes to check against, never a dependency |
 | dashboard | `static/dash.html` | plain HTML/JS, polling the report endpoints — no Leptos/Trunk build, shipped deliberately smaller |
 | tracker injection | `optica` `[analytics]` config | cyber.page pages already carry a snippet slot; point it at lytics |
@@ -300,21 +300,28 @@ Rust client (canonical encoding + PoW + ADR-036) proving the API needs no
 browser. acceptance gate: sustain 100 events/s on one core with the cell
 embedded.
 
-### phase 3 — queries: the full report set (4 sessions) — done, partially
+### phase 3 — queries: the full report set (4 sessions) — done
 
-inf rules ship for: neurons/views/attention timeseries, top particles,
-countries, devices, actors, and the identity-powered tier's retention
-matrix and return probability within a stated window. all engine
-arithmetic is integer ([[inf]] has no floats; ratios render at the
+every report is an inf rule: neurons/views/attention timeseries, top
+particles, countries, devices, actors, retention matrix, return probability
+within a stated window, and — sources, channels, passages, funnels. all
+engine arithmetic is integer ([[inf]] has no floats; ratios render at the
 dashboard edge). differential tests pin every migrated report to the Rust
-implementation it replaced.
+implementation it replaced; that implementation is `#[cfg(test)]` only —
+not present in the release binary at all.
 
-sources, channels, passages and funnels stay hand-written Rust: they group
-by *passage*, which needs state carried across an ordered scan (an
-entry/exit/lag primitive), and inf's language has no window or lag
-construct today — verified directly against the evaluator, not assumed.
-extending inf with that primitive, behavior-checked against the cozo
-reference, is the remaining work in this phase.
+sources/channels/passages/funnel group by *passage* (the run of a neuron's
+events from one arrival to the next), which looked at first like it needed
+an ordered scan carrying state between consecutive events — a window/lag
+primitive inf's language does not have, confirmed directly against the
+evaluator. it turned out not to: a passage boundary is just a count. the
+passage id of an event is the number of that neuron's arrivals strictly
+after its first-ever event and at-or-before this event's own timestamp — an
+inequality self-join plus `count`, the same running-count technique
+`retention`/`returns` already used for cohort/offset math. funnels needed no
+new technique at all — "does an increasing-timestamp subsequence exist" is
+what a chain of ordered existential joins already answers, provably
+equivalent to the greedy single-pass scan the Rust reference used.
 
 ### phase 4 — dashboard (3 sessions) — done, smaller than planned
 

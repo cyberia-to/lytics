@@ -9,19 +9,21 @@
 //! no timeouts. all arithmetic is integer; ratios are rendered at the
 //! dashboard edge.
 //!
-//! `inf_reports` now answers most of these through real inf datalog; the
-//! Rust functions here stay as its differential-testing oracle (see
-//! `inf_reports.rs`'s module doc for exactly which reports migrated and
-//! which stay Rust because inf's language cannot express them yet —
-//! `sources`/`channels`/`passages`/`passages_report`/`funnel` roll up by
-//! *visit* (a passage), which needs an ordered scan inf has no primitive
-//! for. those, plus `overview`'s visit-derived fields, are still live —
-//! `main.rs` calls them directly.
+//! `inf_reports` answers every one of these reports through real inf
+//! datalog now — `main.rs` calls only `inf_reports::` functions. everything
+//! below `Stored`/`in_window` is `#[cfg(test)]`: it exists solely as the
+//! differential-testing oracle `inf_reports.rs`'s tests compare against, and
+//! is not part of the release binary at all — not dead code kept around out
+//! of caution, genuinely absent from a non-test build.
 
 use crate::enrich::{Attribution, Device};
-use lytics_event::{Actor, EventBody, Kind, Navigation};
+use lytics_event::{EventBody, Kind, Navigation};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use lytics_event::Actor;
+#[cfg(test)]
 use serde_json::json;
+#[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
 
 /// a stored, enriched event — payload-log plaintext.
@@ -64,6 +66,7 @@ pub fn in_window(events: &[Stored], from: u64, to: u64) -> Vec<&Stored> {
 }
 
 /// events grouped per neuron, ordered by timestamp.
+#[cfg(test)]
 fn per_neuron<'a>(events: &[&'a Stored]) -> BTreeMap<&'a str, Vec<&'a Stored>> {
     let mut map: BTreeMap<&str, Vec<&Stored>> = BTreeMap::new();
     for e in events {
@@ -78,10 +81,12 @@ fn per_neuron<'a>(events: &[&'a Stored]) -> BTreeMap<&'a str, Vec<&'a Stored>> {
 /// a passage: the run of a neuron's events from one arrival to the next.
 /// a stream that opens without an observed arrival still opens a passage —
 /// the first event is where the run began, arrival or no.
+#[cfg(test)]
 pub struct Passage<'a> {
     pub events: Vec<&'a Stored>,
 }
 
+#[cfg(test)]
 impl Passage<'_> {
     pub fn views(&self) -> usize {
         self.events.iter().filter(|e| e.is_pageview()).count()
@@ -101,6 +106,7 @@ impl Passage<'_> {
     }
 }
 
+#[cfg(test)]
 pub fn passages<'a>(events: &[&'a Stored]) -> Vec<Passage<'a>> {
     let mut out = Vec::new();
     for (_neuron, list) in per_neuron(events) {
@@ -120,6 +126,7 @@ pub fn passages<'a>(events: &[&'a Stored]) -> Vec<Passage<'a>> {
     out
 }
 
+#[cfg(test)]
 fn distinct_neurons(events: &[&Stored]) -> usize {
     events
         .iter()
@@ -128,6 +135,7 @@ fn distinct_neurons(events: &[&Stored]) -> usize {
         .len()
 }
 
+#[cfg(test)]
 pub fn overview(events: &[&Stored]) -> serde_json::Value {
     let views = events.iter().filter(|e| e.is_pageview()).count();
     let attention: u64 = events.iter().map(|e| e.attention_ms()).sum();
@@ -167,9 +175,7 @@ pub fn overview(events: &[&Stored]) -> serde_json::Value {
 }
 
 /// bucket ms: "hour" or "day".
-// migrated to inf_reports:: for the live route; kept here as the
-// differential-testing oracle inf_reports's tests compare against.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn timeseries(events: &[&Stored], bucket_ms: u64) -> serde_json::Value {
     let mut buckets: BTreeMap<u64, (BTreeSet<&str>, u64, u64)> = BTreeMap::new();
     for e in events {
@@ -188,6 +194,7 @@ pub fn timeseries(events: &[&Stored], bucket_ms: u64) -> serde_json::Value {
     json!(rows)
 }
 
+#[cfg(test)]
 fn top_counts<'a, F: Fn(&&'a Stored) -> Option<String>>(
     events: &[&'a Stored],
     key: F,
@@ -208,9 +215,7 @@ fn top_counts<'a, F: Fn(&&'a Stored) -> Option<String>>(
 /// top particles by views — each pathname is a particle (`graph::page_particle`
 /// hashes hostname+pathname); `pathname` here is the particle's human-readable
 /// name, not its hash.
-// migrated to inf_reports:: for the live route; kept here as the
-// differential-testing oracle inf_reports's tests compare against.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
     let mut attention: BTreeMap<String, u64> = BTreeMap::new();
     for e in events {
@@ -232,6 +237,7 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
 }
 
 /// visits by source, with views + attention rolled up from each visit's events.
+#[cfg(test)]
 pub fn sources(events: &[&Stored], limit: usize) -> serde_json::Value {
     visit_breakdown(events, limit, |e| {
         e.attribution
@@ -242,6 +248,7 @@ pub fn sources(events: &[&Stored], limit: usize) -> serde_json::Value {
 }
 
 /// visits by channel (same rollup as sources).
+#[cfg(test)]
 pub fn channels(events: &[&Stored]) -> serde_json::Value {
     visit_breakdown(events, 32, |e| {
         format!("{:?}", e.attribution.channel).to_lowercase()
@@ -249,6 +256,7 @@ pub fn channels(events: &[&Stored]) -> serde_json::Value {
 }
 
 /// group visits by a key taken from the visit's first arrival (or first event).
+#[cfg(test)]
 fn visit_breakdown<F: Fn(&Stored) -> String>(
     events: &[&Stored],
     limit: usize,
@@ -292,9 +300,7 @@ fn visit_breakdown<F: Fn(&Stored) -> String>(
     )
 }
 
-// migrated to inf_reports:: for the live route; kept here as the
-// differential-testing oracle inf_reports's tests compare against.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn actors(events: &[&Stored]) -> serde_json::Value {
     let humans: Vec<&Stored> = events
         .iter()
@@ -317,9 +323,7 @@ pub fn actors(events: &[&Stored]) -> serde_json::Value {
     })
 }
 
-// migrated to inf_reports:: for the live route; kept here as the
-// differential-testing oracle inf_reports's tests compare against.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
     let mut neurons: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
     for e in events {
@@ -346,9 +350,7 @@ pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
     )
 }
 
-// migrated to inf_reports:: for the live route; kept here as the
-// differential-testing oracle inf_reports's tests compare against.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn devices(events: &[&Stored], limit: usize) -> serde_json::Value {
     let browsers = top_counts(events, |e| e.device.browser.clone(), limit);
     let oses = top_counts(events, |e| e.device.os.clone(), limit);
@@ -360,13 +362,12 @@ pub fn devices(events: &[&Stored], limit: usize) -> serde_json::Value {
     })
 }
 
+#[cfg(test)]
 const WEEK_MS: u64 = 7 * 24 * 3600 * 1000;
 
 /// retention matrix over ALL events (cohorts need full history):
 /// cohort week (first-seen) × week offset → distinct neurons active.
-// migrated to inf_reports:: for the live route; kept here as the
-// differential-testing oracle inf_reports's tests compare against.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn retention(events: &[Stored], weeks: usize) -> serde_json::Value {
     let mut first_seen: BTreeMap<&str, u64> = BTreeMap::new();
     for e in events {
@@ -406,6 +407,7 @@ pub fn retention(events: &[Stored], weeks: usize) -> serde_json::Value {
 
 /// ordered funnel: how many neurons complete each prefix of `steps`
 /// (pathnames) within the window.
+#[cfg(test)]
 pub fn funnel(events: &[&Stored], steps: &[String]) -> serde_json::Value {
     if steps.is_empty() {
         return json!([]);
@@ -434,9 +436,7 @@ pub fn funnel(events: &[&Stored], steps: &[String]) -> serde_json::Value {
 /// return probability: of neurons first seen in [from, to), how many came
 /// back within `horizon_ms` after their first event. integers only —
 /// (returned, total) — the ratio renders at the edge.
-// migrated to inf_reports:: for the live route; kept here as the
-// differential-testing oracle inf_reports's tests compare against.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn returns(events: &[Stored], from: u64, to: u64, horizon_ms: u64) -> serde_json::Value {
     let mut first_seen: BTreeMap<&str, u64> = BTreeMap::new();
     for e in events {
@@ -461,6 +461,7 @@ pub fn returns(events: &[Stored], from: u64, to: u64, horizon_ms: u64) -> serde_
     json!({"cohort": cohort.len(), "returned": returned.len(), "horizon_ms": horizon_ms})
 }
 
+#[cfg(test)]
 pub fn passages_report(events: &[&Stored], limit: usize) -> serde_json::Value {
     let p = passages(events);
     let total = p.len();
