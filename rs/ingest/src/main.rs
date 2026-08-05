@@ -359,8 +359,8 @@ async fn demo() -> Html<&'static str> {
     Html(include_str!("../static/demo.html"))
 }
 
-/// serve a tracker asset. loader.js is source (embedded); the wasm core and
-/// its bindings are generated (read from disk, built by build-tracker.sh).
+/// serve a tracker asset from LYTICS_STATIC on disk (loader + wasm + bindings)
+/// so JS fixes ship without recompiling the binary.
 async fn tracker_asset(Path(name): Path<String>) -> impl IntoResponse {
     let mime = |n: &str| {
         if n.ends_with(".wasm") {
@@ -372,31 +372,29 @@ async fn tracker_asset(Path(name): Path<String>) -> impl IntoResponse {
     let headers = |m: &'static str| {
         [
             (axum::http::header::CONTENT_TYPE, m),
-            (axum::http::header::CACHE_CONTROL, "public, max-age=3600"),
+            // short TTL — endpoint/loader fixes must not stick for an hour
+            (axum::http::header::CACHE_CONTROL, "public, max-age=60"),
         ]
     };
-    if name == "loader.js" {
-        return (
-            headers("text/javascript"),
-            include_str!("../static/tracker/loader.js"),
+    const ALLOWED: &[&str] = &[
+        "loader.js",
+        "lytics_core.js",
+        "lytics_core_bg.wasm",
+        "words.js",
+    ];
+    if !ALLOWED.contains(&name.as_str()) {
+        return (StatusCode::NOT_FOUND, "unknown asset").into_response();
+    }
+    let dir = std::env::var("LYTICS_STATIC")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/static/tracker").into());
+    match std::fs::read(format!("{dir}/{name}")) {
+        Ok(bytes) => (headers(mime(&name)), bytes).into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            "tracker not built — run build-tracker.sh / deploy static/tracker",
         )
-            .into_response();
+            .into_response(),
     }
-    if name == "lytics_core.js" || name == "lytics_core_bg.wasm" || name == "words.js" {
-        let dir = std::env::var("LYTICS_STATIC")
-            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/static/tracker").into());
-        match std::fs::read(format!("{dir}/{name}")) {
-            Ok(bytes) => return (headers(mime(&name)), bytes).into_response(),
-            Err(_) => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    "tracker not built — run build-tracker.sh",
-                )
-                    .into_response();
-            }
-        }
-    }
-    (StatusCode::NOT_FOUND, "unknown asset").into_response()
 }
 
 #[tokio::main]

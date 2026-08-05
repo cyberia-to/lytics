@@ -10,10 +10,17 @@
 
 import init, { Tracker, generate_entropy } from "./lytics_core.js";
 
-const script = document.currentScript;
-const ENDPOINT = (script?.dataset.endpoint || "").replace(/\/$/, "");
-const DOMAIN = script?.dataset.domain || location.hostname.replace(/^www\./, "");
-const HRP = script?.dataset.hrp || "lytics";
+// type=module scripts have document.currentScript === null — resolve our tag.
+const script =
+  document.currentScript ||
+  document.querySelector('script[src*="loader.js"][data-endpoint]') ||
+  document.querySelector('script[type="module"][src*="/lytics/tracker/"]') ||
+  document.querySelector('script[type="module"][src*="loader.js"]');
+// default /lytics when embedded on cyberstates (same-origin subpath)
+const ENDPOINT = (script?.dataset?.endpoint || "/lytics").replace(/\/$/, "");
+const DOMAIN =
+  script?.dataset?.domain || location.hostname.replace(/^www\./, "");
+const HRP = script?.dataset?.hrp || "lytics";
 const HEARTBEAT_MS = 15000; // instrument granularity — bounds attention lost to a killed tab
 const IDLE_MS = 5000; // input silence pauses the attention clock
 
@@ -44,7 +51,9 @@ window.lytics.importPhrase = async (phrase) => {
   localStorage.setItem(KEY, phraseToEntropy(phrase));
   location.reload();
 };
-window.lytics.forget = () => { localStorage.removeItem(KEY); };
+window.lytics.forget = () => {
+  localStorage.removeItem(KEY);
+};
 
 // ── transport ───────────────────────────────────────────────────────────────
 async function difficulty() {
@@ -76,8 +85,10 @@ async function send(spec) {
     target,
   );
   const r = await fetch(`${ENDPOINT}/api/event`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: json, keepalive: true,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: json,
+    keepalive: true,
   });
   if (r.status === 202) enrolled = true; // first accept enrolls the neuron
   return r.status;
@@ -87,10 +98,24 @@ async function send(spec) {
 // integrate time while the page is visible AND the neuron is active. `counting`
 // is the single truth of whether the clock runs; every stretch is accrued
 // before the clock stops, so no visible time is ever lost to a transition.
-let attentionMs = 0, scrollDepth = 0, lastTick = 0, counting = false, lastInput = 0;
-function now() { return Date.now(); }
-function startCounting() { if (!counting) { counting = true; lastTick = now(); } }
-function stopCounting() { accrue(); counting = false; }
+let attentionMs = 0,
+  scrollDepth = 0,
+  lastTick = 0,
+  counting = false,
+  lastInput = 0;
+function now() {
+  return Date.now();
+}
+function startCounting() {
+  if (!counting) {
+    counting = true;
+    lastTick = now();
+  }
+}
+function stopCounting() {
+  accrue();
+  counting = false;
+}
 function accrue() {
   if (!counting) return;
   const t = now();
@@ -104,31 +129,44 @@ function markActive() {
 }
 function trackScroll() {
   const h = document.documentElement;
-  const denom = (h.scrollHeight - h.clientHeight) || 1;
+  const denom = h.scrollHeight - h.clientHeight || 1;
   const pct = Math.min(100, Math.round((h.scrollTop / denom) * 100));
   if (pct > scrollDepth) scrollDepth = pct;
 }
 async function flushAttention() {
   accrue();
   if (attentionMs < 1000) return;
-  const ms = attentionMs; attentionMs = 0;
-  await afterReady(() => send({
-    kind: "attention", pathname: location.pathname,
-    attention_ms: ms, scroll_depth: scrollDepth, timestamp: now(),
-  }));
+  const ms = attentionMs;
+  attentionMs = 0;
+  await afterReady(() =>
+    send({
+      kind: "attention",
+      pathname: location.pathname,
+      attention_ms: ms,
+      scroll_depth: scrollDepth,
+      timestamp: now(),
+    }),
+  );
 }
 
 // ── pageview + SPA ───────────────────────────────────────────────────────────
 let firstView = true;
 function pageview() {
   const nav = firstView
-    ? (document.referrer && !document.referrer.includes(DOMAIN) ? "external" : "direct")
+    ? document.referrer && !document.referrer.includes(DOMAIN)
+      ? "external"
+      : "direct"
     : "internal";
   firstView = false;
-  scrollDepth = 0; attentionMs = 0; markActive();
+  scrollDepth = 0;
+  attentionMs = 0;
+  markActive();
   const spec = {
-    kind: "pageview", pathname: location.pathname, navigation: nav,
-    referrer: document.referrer || null, timestamp: now(),
+    kind: "pageview",
+    pathname: location.pathname,
+    navigation: nav,
+    referrer: document.referrer || null,
+    timestamp: now(),
   };
   afterReady(() => send(spec));
 }
@@ -139,12 +177,18 @@ function afterReady(fn) {
 function hookHistory() {
   for (const m of ["pushState", "replaceState"]) {
     const orig = history[m];
-    history[m] = function () { const r = orig.apply(this, arguments); onRoute(); return r; };
+    history[m] = function () {
+      const r = orig.apply(this, arguments);
+      onRoute();
+      return r;
+    };
   }
   addEventListener("popstate", onRoute);
 }
 let lastPath = location.pathname;
-function flushAndView() { flushAttention().then(pageview); }
+function flushAndView() {
+  flushAttention().then(pageview);
+}
 function onRoute() {
   if (location.pathname === lastPath) return;
   lastPath = location.pathname;
@@ -157,10 +201,17 @@ for (const e of ["mousemove", "keydown", "click", "scroll", "touchstart"]) {
   addEventListener(e, markActive, { passive: true });
 }
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") { stopCounting(); flushAttention(); }
-  else { markActive(); }
+  if (document.visibilityState === "hidden") {
+    stopCounting();
+    flushAttention();
+  } else {
+    markActive();
+  }
 });
-addEventListener("pagehide", () => { stopCounting(); flushAttention(); });
+addEventListener("pagehide", () => {
+  stopCounting();
+  flushAttention();
+});
 addEventListener("blur", accrue);
 setInterval(flushAttention, HEARTBEAT_MS);
 
@@ -173,5 +224,8 @@ hookHistory();
   enrolled = await difficulty();
   ready = true;
   window.lytics.neuron = tracker.neuron;
-  while (queue.length) { const fn = queue.shift(); await fn(); }
+  while (queue.length) {
+    const fn = queue.shift();
+    await fn();
+  }
 })().catch((e) => console.error("lytics:", e));
