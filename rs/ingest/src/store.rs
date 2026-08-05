@@ -134,7 +134,9 @@ impl Store {
                 Ok(k) => k,
                 Err(_) => continue,
             };
-            let nonce_bytes: [u8; 12] = frame[2 + nlen..2 + nlen + 12].try_into().unwrap();
+            let nonce_bytes: [u8; 12] = frame[2 + nlen..2 + nlen + 12]
+                .try_into()
+                .expect("length checked above: frame.len() >= 2 + nlen + 12");
             let nonce = Nonce::from(nonce_bytes);
             let ct = &frame[2 + nlen + 12..];
             let cipher = ChaCha20Poly1305::new((&key).into());
