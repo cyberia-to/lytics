@@ -46,7 +46,7 @@ pub struct Tracker {
 /// the secret never leaves the browser.
 #[wasm_bindgen]
 pub fn generate_entropy() -> String {
-    hex::encode(Seed::generate().entropy())
+    lytics_event::hex::encode(&Seed::generate().entropy())
 }
 
 #[wasm_bindgen]
@@ -54,7 +54,7 @@ impl Tracker {
     /// bind stored entropy (32-byte hex) to a domain.
     #[wasm_bindgen(constructor)]
     pub fn new(entropy_hex: &str, domain: &str, hrp: &str) -> Result<Tracker, String> {
-        let bytes = hex::decode(entropy_hex).map_err(|_| "entropy hex")?;
+        let bytes = lytics_event::hex::decode(entropy_hex).ok_or("entropy hex")?;
         let entropy: [u8; 32] = bytes.as_slice().try_into().map_err(|_| "entropy must be 32 bytes")?;
         let seed = Seed::from_entropy(entropy);
         let neuron = seed.neuron(domain, hrp).map_err(|_| "derivation")?;

@@ -18,7 +18,6 @@ crate-type = ["cdylib", "rlib"]
 lytics-event = { path = "../event", default-features = false }
 wasm-bindgen = "=0.2.113"
 getrandom = { version = "0.2", features = ["js"] }
-hex = "0.4"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # free-list allocator for single-threaded wasm — replaces dlmalloc (~5 KB)

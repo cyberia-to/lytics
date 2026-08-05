@@ -18,7 +18,7 @@ visitor browser                     server                       reader
 ┌─────────────────┐   HTTPS   ┌──────────────────┐        ┌──────────────┐
 │ loader.js ~2KB  │  ───────► │ ingest (axum)    │        │ dashboard    │
 │  capture + queue│           │  verify sig+pow  │        │ leptos/trunk │
-│ core.wasm ~27KB │           │  ua · geo · ref  │  ───►  │  d3 widgets  │
+│ core.wasm ~26KB │           │  ua · geo · ref  │  ───►  │  d3 widgets  │
 │  keys·sign·pow  │           │  cast signal     │        └──────────────┘
 └─────────────────┘           │ cell (cybergraph)│              ▲
                               │  bbg state·time  │              │
@@ -29,7 +29,7 @@ visitor browser                     server                       reader
 | component | language | role |
 |---|---|---|
 | loader | JS module, ~2 KB source | fires on page load, captures pageview + SPA route changes instantly, runs the attention sensor, queues events until the core is ready |
-| core | Rust → wasm, ~32 KB gzip / ~27 KB brotli measured | keygen, per-domain derivation, secp256k1 signing, PoW; loaded async so page performance never waits on crypto |
+| core | Rust → wasm, ~31 KB gzip / ~26 KB brotli measured | keygen, per-domain derivation, secp256k1 signing, PoW; loaded async so page performance never waits on crypto |
 | ingest | Rust, axum | signature + PoW verification, replay dedup, UA parsing, MaxMind geo (ip read, used, discarded), referrer→source attribution, adaptive difficulty, signal casting into the cell |
 | store | [[cybergraph]] cell + [[bbg]] | the ingest service embeds a cell in-process; events enter as signed signals, bbg holds the state and its time dimension indexes the stream |
 | query | [[inf]] datalog over bbg | timeseries, top-N, passages, retention, funnels — each report is one inf rule; the path is live: cybergraph already runs inf over bbg state in-process |
@@ -48,8 +48,8 @@ stay in Rust — JS is confined to the bootstrap the platform requires and the
 sensor the platform exposes.
 
 on core size: the original ≤64 KB budget did not survive contact with the
-primitives, but eight cuts brought the core from ~172 KB gzip to ~32 KB gzip
-(~27 KB brotli):
+primitives, but nine cuts brought the core from ~172 KB gzip to ~31 KB gzip
+(~26 KB brotli):
 
 1. the 2048-word list left the hot path — the secret is raw 32-byte entropy,
    and the BIP39 mnemonic is a lazy backup in `words.js`, loaded only on
@@ -70,7 +70,10 @@ primitives, but eight cuts brought the core from ~172 KB gzip to ~32 KB gzip
 7. base64 and the allocator went hand-rolled/minimal (a ~40-line RFC 4648
    codec pinned by parity tests; lol_alloc's free-list replaces dlmalloc —
    the tracker is single-threaded and allocates small short-lived strings).
-8. `wasm-opt -Oz` ran over the result.
+8. hex went hand-rolled too (~30 lines) — the crate's generic decode
+   iterator (`GenericShunt<Map<Enumerate<Chunks>>>`) costs more than the
+   table lookup it wraps.
+9. `wasm-opt -Oz` ran over the result.
 
 what remains is the honest floor: secp256k1 signing (k256, now the largest
 piece) plus Poseidon2 (hemera, a mere ~3 KB) for the event hash, the KDF,
@@ -81,7 +84,7 @@ minimal secp256k1, or moving signing to `@noble/secp256k1` in JS (~4 KB,
 same curve) — deferred; the curve stays secp256k1 either way so the mudra
 bridge and on-chain identity hold.
 
-first-load transfer, measured: ~41 KB gzip / ~34 KB brotli total (wasm +
+first-load transfer, measured: ~38 KB gzip / ~32 KB brotli total (wasm +
 wasm-bindgen glue + loader), one time, then served from cache. the loader
 is a JS module; `words.js` (~6 KB brotli, the wordlist) transfers only when
 a visitor exports or imports their identity.

@@ -10,6 +10,7 @@
 
 pub mod b64;
 pub mod canonical;
+pub mod hex;
 pub mod event;
 pub mod keys;
 pub mod pow;
