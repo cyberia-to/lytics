@@ -70,7 +70,7 @@ pub struct Passage<'a> {
 }
 
 impl Passage<'_> {
-    pub fn pages(&self) -> usize {
+    pub fn views(&self) -> usize {
         self.events.iter().filter(|e| e.is_pageview()).count()
     }
     pub fn entry(&self) -> Option<&str> {
@@ -103,7 +103,7 @@ fn distinct_neurons(events: &[&Stored]) -> usize {
 }
 
 pub fn overview(events: &[&Stored]) -> serde_json::Value {
-    let pageviews = events.iter().filter(|e| e.is_pageview()).count();
+    let views = events.iter().filter(|e| e.is_pageview()).count();
     let attention: u64 = events.iter().map(|e| e.attention_ms()).sum();
     let arrivals = events.iter().filter(|e| e.is_arrival()).count();
     let agents = events
@@ -115,7 +115,7 @@ pub fn overview(events: &[&Stored]) -> serde_json::Value {
     let p = passages(events);
     json!({
         "neurons": distinct_neurons(events),
-        "pageviews": pageviews,
+        "views": views,
         "arrivals": arrivals,
         "attention_ms": attention,
         "agent_neurons": agents,
@@ -137,7 +137,7 @@ pub fn timeseries(events: &[&Stored], bucket_ms: u64) -> serde_json::Value {
     }
     let rows: Vec<_> = buckets
         .into_iter()
-        .map(|(t, (n, pv, att))| json!({"t": t, "neurons": n.len(), "pageviews": pv, "attention_ms": att}))
+        .map(|(t, (n, pv, att))| json!({"t": t, "neurons": n.len(), "views": pv, "attention_ms": att}))
         .collect();
     json!(rows)
 }
@@ -159,7 +159,10 @@ fn top_counts<'a, F: Fn(&&'a Stored) -> Option<String>>(
     rows
 }
 
-pub fn pages(events: &[&Stored], limit: usize) -> serde_json::Value {
+/// top particles by views — each pathname is a particle (`graph::page_particle`
+/// hashes hostname+pathname); `pathname` here is the particle's human-readable
+/// name, not its hash.
+pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
     let mut attention: BTreeMap<String, u64> = BTreeMap::new();
     for e in events {
         *attention.entry(e.body.pathname.clone()).or_default() += e.attention_ms();
@@ -169,7 +172,7 @@ pub fn pages(events: &[&Stored], limit: usize) -> serde_json::Value {
         .into_iter()
         .map(|(path, pv)| {
             let att = attention.get(&path).copied().unwrap_or(0);
-            json!({"pathname": path, "pageviews": pv, "attention_ms": att})
+            json!({"pathname": path, "views": pv, "attention_ms": att})
         })
         .collect();
     json!(out)
@@ -196,8 +199,8 @@ pub fn actors(events: &[&Stored]) -> serde_json::Value {
         events.iter().filter(|e| e.body.actor == Actor::Agent).copied().collect();
     let agent_names = top_counts(&agents, |e| e.body.agent.as_ref().map(|a| a.name.clone()), 16);
     json!({
-        "human": {"neurons": distinct_neurons(&humans), "pageviews": humans.iter().filter(|e| e.is_pageview()).count(), "attention_ms": humans.iter().map(|e| e.attention_ms()).sum::<u64>()},
-        "agent": {"neurons": distinct_neurons(&agents), "pageviews": agents.iter().filter(|e| e.is_pageview()).count(), "declared": agent_names.into_iter().map(|(n, c)| json!({"name": n, "pageviews": c})).collect::<Vec<_>>()},
+        "human": {"neurons": distinct_neurons(&humans), "views": humans.iter().filter(|e| e.is_pageview()).count(), "attention_ms": humans.iter().map(|e| e.attention_ms()).sum::<u64>()},
+        "agent": {"neurons": distinct_neurons(&agents), "views": agents.iter().filter(|e| e.is_pageview()).count(), "declared": agent_names.into_iter().map(|(n, c)| json!({"name": n, "views": c})).collect::<Vec<_>>()},
     })
 }
 
@@ -319,7 +322,7 @@ pub fn returns(events: &[Stored], from: u64, to: u64, horizon_ms: u64) -> serde_
 pub fn passages_report(events: &[&Stored], limit: usize) -> serde_json::Value {
     let p = passages(events);
     let total = p.len();
-    let pages_total: usize = p.iter().map(|x| x.pages()).sum();
+    let views_total: usize = p.iter().map(|x| x.views()).sum();
     let mut entries: BTreeMap<String, u64> = BTreeMap::new();
     let mut exits: BTreeMap<String, u64> = BTreeMap::new();
     for x in &p {
@@ -338,7 +341,7 @@ pub fn passages_report(events: &[&Stored], limit: usize) -> serde_json::Value {
     };
     json!({
         "passages": total,
-        "pages_total": pages_total,
+        "views_total": views_total,
         "entries": top(entries),
         "exits": top(exits),
     })
@@ -387,7 +390,7 @@ mod tests {
         let refs: Vec<&Stored> = events.iter().collect();
         let p = passages(&refs);
         assert_eq!(p.len(), 2);
-        assert_eq!(p[0].pages(), 2);
+        assert_eq!(p[0].views(), 2);
         assert_eq!(p[0].entry(), Some("/a"));
         assert_eq!(p[0].exit(), Some("/b"));
         assert_eq!(p[1].entry(), Some("/c"));
@@ -452,7 +455,7 @@ mod tests {
         let refs: Vec<&Stored> = events.iter().collect();
         let o = overview(&refs);
         assert_eq!(o["attention_ms"], 42_000);
-        assert_eq!(o["pageviews"], 1);
+        assert_eq!(o["views"], 1);
         assert_eq!(o["neurons"], 1);
     }
 }

@@ -294,7 +294,7 @@ async fn get_report(
             };
             reports::timeseries(&windowed, bucket)
         }
-        "pages" => reports::pages(&windowed, limit),
+        "particles" => reports::particles(&windowed, limit),
         "sources" => reports::sources(&windowed, limit),
         "channels" => reports::channels(&windowed),
         "actors" => reports::actors(&windowed),

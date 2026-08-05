@@ -10,7 +10,7 @@
 <h1>📈 lytics</h1>
 <small>every visitor is a neuron — symbolic dashboard, the engine is the product</small>
 <div id="ov"></div>
-<h2>pages</h2><table id="pages"></table>
+<h2>particles</h2><table id="particles"></table>
 <h2>sources</h2><table id="sources"></table>
 <h2>channels</h2><table id="channels"></table>
 <h2>actors</h2><table id="actors"></table>
@@ -24,20 +24,20 @@ function rows(el, header, data, cols) {
 async function refresh() {
   const o = await get("overview");
   document.getElementById("ov").innerHTML = [
-    ["neurons", o.neurons], ["pageviews", o.pageviews], ["arrivals", o.arrivals],
+    ["neurons", o.neurons], ["views", o.views], ["arrivals", o.arrivals],
     ["passages", o.passages], ["attention", fmt(o.attention_ms)], ["agents", o.agent_neurons],
   ].map(([k, v]) => `<div><b>${v}</b>${k}</div>`).join("");
-  rows(document.getElementById("pages"), ["path", "views", "attention"],
-    (await get("pages")).map(p => ({...p, attention_ms: fmt(p.attention_ms)})),
-    ["pathname", "pageviews", "attention_ms"]);
+  rows(document.getElementById("particles"), ["path", "views", "attention"],
+    (await get("particles")).map(p => ({...p, attention_ms: fmt(p.attention_ms)})),
+    ["pathname", "views", "attention_ms"]);
   rows(document.getElementById("sources"), ["source", "arrivals"], await get("sources"), ["source", "arrivals"]);
   rows(document.getElementById("channels"), ["channel", "arrivals"], await get("channels"), ["channel", "arrivals"]);
   const a = await get("actors");
   document.getElementById("actors").innerHTML =
-    `<tr><th>actor</th><th>neurons</th><th>pageviews</th></tr>` +
-    `<tr><td>human</td><td>${a.human.neurons}</td><td>${a.human.pageviews}</td></tr>` +
-    `<tr><td>agent</td><td>${a.agent.neurons}</td><td>${a.agent.pageviews}</td></tr>` +
-    a.agent.declared.map(d => `<tr><td>· ${d.name}</td><td></td><td>${d.pageviews}</td></tr>`).join("");
+    `<tr><th>actor</th><th>neurons</th><th>views</th></tr>` +
+    `<tr><td>human</td><td>${a.human.neurons}</td><td>${a.human.views}</td></tr>` +
+    `<tr><td>agent</td><td>${a.agent.neurons}</td><td>${a.agent.views}</td></tr>` +
+    a.agent.declared.map(d => `<tr><td>· ${d.name}</td><td></td><td>${d.views}</td></tr>`).join("");
 }
 refresh(); setInterval(refresh, 5000);
 </script>

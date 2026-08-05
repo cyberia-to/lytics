@@ -302,7 +302,7 @@ embedded.
 
 ### phase 3 — queries: the full report set (4 sessions)
 
-inf rules for: neurons/pageviews/attention timeseries, top pages, sources,
+inf rules for: neurons/views/attention timeseries, top particles, sources,
 countries, devices, goals, custom props — and the identity-powered tier:
 retention matrix, cohorts, funnels, attention per arrival, return
 probability within a stated window. arrival and passage segmentation at
