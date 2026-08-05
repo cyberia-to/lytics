@@ -48,6 +48,18 @@ struct App {
     chains: graph::Chains,
     events: Vec<Stored>,
     seen: BTreeSet<[u8; 32]>,
+    /// bumped on every mutation to `events` after boot (accept, shred) — a
+    /// report cached at a given version is exactly the query inf would
+    /// still return, because nothing it could read has changed since.
+    data_version: u64,
+    /// full report responses keyed by (report name, query params as
+    /// received). inf's passage-grouping queries genuinely need this: the
+    /// running-count self-join `passage_ids` uses is real work every time
+    /// it runs (unindexed inequality join, worse than the Rust loop it
+    /// replaced at scale) — repeat GETs of an unchanged window (a dashboard
+    /// polling in real time, mostly between actual new events) should not
+    /// pay for it again. never served across a version bump.
+    report_cache: BTreeMap<(String, String), (u64, serde_json::Value)>,
 }
 
 type Shared = Arc<Mutex<App>>;
@@ -162,6 +174,7 @@ fn ingest(
 
     app.seen.insert(hash);
     app.events.push(stored);
+    app.data_version += 1;
     Ok(("accepted", hash_hex))
 }
 
@@ -271,6 +284,7 @@ async fn delete_neuron(
     match app.store.shred(&neuron) {
         Ok(_) => {
             app.events.retain(|e| e.body.neuron != neuron);
+            app.data_version += 1;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -301,59 +315,84 @@ async fn get_report(
     Path(name): Path<String>,
     Query(q): Query<BTreeMap<String, String>>,
 ) -> impl IntoResponse {
-    let app = state.lock().expect("lock");
+    let mut app = state.lock().expect("lock");
     let now = now_ms();
     let parse_u64 = |k: &str, d: u64| q.get(k).and_then(|v| v.parse().ok()).unwrap_or(d);
     let from = parse_u64("from", now.saturating_sub(7 * 24 * 3600 * 1000));
     let to = parse_u64("to", now + 1);
     let limit = parse_u64("limit", 10) as usize;
-    let windowed = reports::in_window(&app.events, from, to);
 
     // every report is answered by inf_reports:: — a fresh LocalSource built
     // from the same event slice, answered by parse→plan→eval. reports.rs's
     // matching functions still exist, but only under #[cfg(test)]: they are
     // the differential-testing oracle inf_reports's tests compare against,
     // never a fallback the release binary can reach.
-    let out = match name.as_str() {
-        "overview" => {
-            let mut o = inf_reports::overview(&windowed);
-            if let Some(obj) = o.as_object_mut() {
-                obj.insert("from".into(), json!(from));
-                obj.insert("to".into(), json!(to));
-                obj.insert("as_of".into(), json!(now));
+    //
+    // the passage-grouped reports (sources/channels/passages/funnel,
+    // overview's visit fields) run a real self-join to find passage
+    // boundaries — measured at ~0.5s per call on 1600 synthetic events, and
+    // the naive nested-loop join behind it does not scale gently. a
+    // dashboard polling in real time mostly asks the same question again
+    // before anything changed, so cache the full response per (report,
+    // query params) and only recompute when `data_version` has moved —
+    // i.e. an event was actually accepted or shredded since. `from`/`to`/
+    // `as_of` are patched onto `overview` fresh below regardless of cache
+    // origin — they are wall-clock, not query results, and cheap either way.
+    let cache_key = (name.clone(), format!("{q:?}"));
+    let cached = app
+        .report_cache
+        .get(&cache_key)
+        .filter(|(ver, _)| *ver == app.data_version)
+        .map(|(_, v)| v.clone());
+
+    let mut out = if let Some(v) = cached {
+        v
+    } else {
+        let windowed = reports::in_window(&app.events, from, to);
+        let computed = match name.as_str() {
+            "overview" => inf_reports::overview(&windowed),
+            "timeseries" => {
+                let bucket = match q.get("bucket").map(String::as_str) {
+                    Some("hour") => 3600 * 1000,
+                    _ => 24 * 3600 * 1000,
+                };
+                inf_reports::timeseries(&windowed, bucket)
             }
-            o
-        }
-        "timeseries" => {
-            let bucket = match q.get("bucket").map(String::as_str) {
-                Some("hour") => 3600 * 1000,
-                _ => 24 * 3600 * 1000,
-            };
-            inf_reports::timeseries(&windowed, bucket)
-        }
-        "particles" => inf_reports::particles(&windowed, limit),
-        "sources" => inf_reports::sources(&windowed, limit),
-        "channels" => inf_reports::channels(&windowed),
-        "actors" => inf_reports::actors(&windowed),
-        "devices" => inf_reports::devices(&windowed, limit),
-        "countries" => inf_reports::countries(&windowed, limit),
-        "passages" => inf_reports::passages_report(&windowed, limit),
-        "retention" => inf_reports::retention(&app.events, parse_u64("weeks", 8) as usize),
-        "returns" => inf_reports::returns(
-            &app.events,
-            from,
-            to,
-            parse_u64("horizon_ms", 7 * 24 * 3600 * 1000),
-        ),
-        "funnel" => {
-            let steps: Vec<String> = q
-                .get("steps")
-                .map(|s| s.split(',').map(String::from).collect())
-                .unwrap_or_default();
-            inf_reports::funnel(&windowed, &steps)
-        }
-        _ => return (StatusCode::NOT_FOUND, "unknown report").into_response(),
+            "particles" => inf_reports::particles(&windowed, limit),
+            "sources" => inf_reports::sources(&windowed, limit),
+            "channels" => inf_reports::channels(&windowed),
+            "actors" => inf_reports::actors(&windowed),
+            "devices" => inf_reports::devices(&windowed, limit),
+            "countries" => inf_reports::countries(&windowed, limit),
+            "passages" => inf_reports::passages_report(&windowed, limit),
+            "retention" => inf_reports::retention(&app.events, parse_u64("weeks", 8) as usize),
+            "returns" => inf_reports::returns(
+                &app.events,
+                from,
+                to,
+                parse_u64("horizon_ms", 7 * 24 * 3600 * 1000),
+            ),
+            "funnel" => {
+                let steps: Vec<String> = q
+                    .get("steps")
+                    .map(|s| s.split(',').map(String::from).collect())
+                    .unwrap_or_default();
+                inf_reports::funnel(&windowed, &steps)
+            }
+            _ => return (StatusCode::NOT_FOUND, "unknown report").into_response(),
+        };
+        let ver = app.data_version;
+        app.report_cache.insert(cache_key, (ver, computed.clone()));
+        computed
     };
+
+    if name == "overview"
+        && let Some(obj) = out.as_object_mut()
+    {
+        obj.insert("from".into(), json!(from));
+        obj.insert("to".into(), json!(to));
+        obj.insert("as_of".into(), json!(now));
+    }
     Json(out).into_response()
 }
 
@@ -439,6 +478,8 @@ async fn main() {
         chains: graph::Chains::default(),
         events: Vec::new(),
         seen: BTreeSet::new(),
+        data_version: 0,
+        report_cache: BTreeMap::new(),
     };
     replay(&mut app);
     eprintln!("replayed {} events", app.events.len());
@@ -495,6 +536,8 @@ mod tests {
             chains: graph::Chains::default(),
             events: Vec::new(),
             seen: BTreeSet::new(),
+            data_version: 0,
+            report_cache: BTreeMap::new(),
         }
     }
 

@@ -470,7 +470,7 @@
                         "DWELL",
                         "ATTENTION",
                     ],
-                    (await get("sources")).map(mapVisitRow),
+                    (await get("sources", "?limit=25")).map(mapVisitRow),
                     visitCols,
                 );
                 table(
@@ -489,7 +489,7 @@
                 table(
                     document.getElementById("particles"),
                     ["PATH", "VIEWS", "ATTENTION"],
-                    (await get("particles")).map((p) => ({
+                    (await get("particles", "?limit=25")).map((p) => ({
                         pathname: p.pathname,
                         views: p.views,
                         attention_ms: fmt(p.attention_ms),

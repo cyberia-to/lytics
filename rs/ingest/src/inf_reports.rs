@@ -57,8 +57,8 @@
 //! - `pid{neuron, ts, passage_id}`, `ev2{neuron, ts, kind, pathname, ms}` —
 //!   built by `passage_source` for every passage-grouped report: `pid` is
 //!   `passage_ids`' output, gap-filled to 0 for events with no qualifying
-//!   arrival; `ev2` restates `events` at the arity `PASSAGE_RULES` needs to
-//!   join back against.
+//!   arrival; `ev2` restates `events` at the arity the `RULE_*` passage
+//!   rollup rules need to join back against.
 
 use crate::reports::Stored;
 use inf_eval::{eval, Ctx, EvalError, Output};
@@ -328,26 +328,32 @@ fn passage_source(events: &[&Stored]) -> LocalSource {
     s
 }
 
-/// shared rule prefix every passage-rollup query below is built on:
-/// `vpq`/`apq` — views/attention summed per passage; `epath`/`xpath` — the
-/// pathname of a passage's earliest/latest pageview (entry/exit); `ksrc`/
-/// `kchan` — the source/channel of a passage's earliest event (the "key
-/// event" — see `reports::visit_breakdown`'s docstring for why that is
-/// always the passage's first event, never a later one). each final `?`
-/// query below re-sends this prefix — `q()` parses a fresh script per call,
-/// so named rules do not carry over between calls, same as `retention`'s
-/// two-stage shape.
-const PASSAGE_RULES: &str = r#"
-vpq[neuron, passage_id, count(pathname)] := pid{neuron, ts, passage_id}, ev2{neuron, ts, kind: "pageview", pathname}
-apq[neuron, passage_id, sum(ms)] := pid{neuron, ts, passage_id}, ev2{neuron, ts, kind: "attention", ms}
-et[neuron, passage_id, min(ts)] := pid{neuron, ts, passage_id}, ev2{neuron, ts, kind: "pageview"}
-epath[neuron, passage_id, pathname] := et[neuron, passage_id, entry_ts], ev2{neuron, ts: entry_ts, pathname}
-xt[neuron, passage_id, max(ts)] := pid{neuron, ts, passage_id}, ev2{neuron, ts, kind: "pageview"}
-xpath[neuron, passage_id, pathname] := xt[neuron, passage_id, exit_ts], ev2{neuron, ts: exit_ts, pathname}
-kt[neuron, passage_id, min(ts)] := pid{neuron, ts, passage_id}
-ksrc[neuron, passage_id, source] := kt[neuron, passage_id, key_ts], attrib_ev{neuron, ts: key_ts, source}
-kchan[neuron, passage_id, channel] := kt[neuron, passage_id, key_ts], attrib_ev{neuron, ts: key_ts, channel}
-"#;
+/// passage-rollup rules, each usable alone — `q()` parses a fresh script per
+/// call, so named rules never carry over between calls (same as
+/// `retention`'s two-stage shape), and the evaluator has no dead-rule
+/// elimination: every named rule in a script gets fully computed even if
+/// the final `?` never reaches it. `PASSAGE_RULES` used to be one 9-rule
+/// blob every query below sent regardless of which of these it actually
+/// needed — measured at 21s for a single `sources()` call on 1600 events,
+/// most of it recomputing rules the query never touched. each query below
+/// now composes only the pieces its own final `?` head reaches.
+///
+/// - `RULE_VPQ`/`RULE_APQ` — views/attention summed per passage.
+/// - `RULE_EPATH`/`RULE_XPATH` — the pathname of a passage's earliest/latest
+///   pageview (entry/exit).
+/// - `RULE_KT` + `RULE_KSRC`/`RULE_KCHAN` — the source/channel of a
+///   passage's earliest event (the "key event" — see `visit_breakdown`'s
+///   docstring for why that is always the passage's first event, never a
+///   later one). `RULE_KT` alone is cheap (no join against `ev2`); callers
+///   needing a passage's key source/channel always pair it with one of
+///   `RULE_KSRC`/`RULE_KCHAN`.
+const RULE_VPQ: &str = "vpq[neuron, passage_id, count(pathname)] := pid{neuron, ts, passage_id}, ev2{neuron, ts, kind: \"pageview\", pathname}\n";
+const RULE_APQ: &str = "apq[neuron, passage_id, sum(ms)] := pid{neuron, ts, passage_id}, ev2{neuron, ts, kind: \"attention\", ms}\n";
+const RULE_EPATH: &str = "et[neuron, passage_id, min(ts)] := pid{neuron, ts, passage_id}, ev2{neuron, ts, kind: \"pageview\"}\nepath[neuron, passage_id, pathname] := et[neuron, passage_id, entry_ts], ev2{neuron, ts: entry_ts, pathname}\n";
+const RULE_XPATH: &str = "xt[neuron, passage_id, max(ts)] := pid{neuron, ts, passage_id}, ev2{neuron, ts, kind: \"pageview\"}\nxpath[neuron, passage_id, pathname] := xt[neuron, passage_id, exit_ts], ev2{neuron, ts: exit_ts, pathname}\n";
+const RULE_KT: &str = "kt[neuron, passage_id, min(ts)] := pid{neuron, ts, passage_id}\n";
+const RULE_KSRC: &str = "ksrc[neuron, passage_id, source] := kt[neuron, passage_id, key_ts], attrib_ev{neuron, ts: key_ts, source}\n";
+const RULE_KCHAN: &str = "kchan[neuron, passage_id, channel] := kt[neuron, passage_id, key_ts], attrib_ev{neuron, ts: key_ts, channel}\n";
 
 /// total passage count and total views-across-all-passages (the latter is
 /// just the overall pageview count restated, but computed the same way as
@@ -375,7 +381,7 @@ fn visit_metrics(events: &[&Stored], views: u64, attention_ms: u64) -> serde_jso
     let multi_page = scalar(
         &src,
         &format!(
-            "{PASSAGE_RULES}many[neuron, passage_id] := vpq[neuron, passage_id, views], gt(views, 1)\n?[count(passage_id)] := many[neuron, passage_id]"
+            "{RULE_VPQ}many[neuron, passage_id] := vpq[neuron, passage_id, views], gt(views, 1)\n?[count(passage_id)] := many[neuron, passage_id]"
         ),
     ) as u64;
     let single_page_visits = visits.saturating_sub(multi_page);
@@ -395,8 +401,8 @@ pub fn passages_report(events: &[&Stored], limit: usize) -> serde_json::Value {
     let src = passage_source(events);
     let (total, views_total) = passages_totals(&src);
 
-    let top_by_pathname = |script: &str| -> Vec<serde_json::Value> {
-        let full = format!("{PASSAGE_RULES}{script}");
+    let top_by_pathname = |rules: &str, script: &str| -> Vec<serde_json::Value> {
+        let full = format!("{rules}{script}");
         let mut rows: Vec<(String, u64)> = q(&src, &full)
             .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
             .unwrap_or_default();
@@ -404,8 +410,14 @@ pub fn passages_report(events: &[&Stored], limit: usize) -> serde_json::Value {
         rows.truncate(limit);
         rows.into_iter().map(|(k, n)| json!({"pathname": k, "passages": n})).collect()
     };
-    let entries = top_by_pathname("?[pathname, count(passage_id)] := epath[neuron, passage_id, pathname]");
-    let exits = top_by_pathname("?[pathname, count(passage_id)] := xpath[neuron, passage_id, pathname]");
+    let entries = top_by_pathname(
+        RULE_EPATH,
+        "?[pathname, count(passage_id)] := epath[neuron, passage_id, pathname]",
+    );
+    let exits = top_by_pathname(
+        RULE_XPATH,
+        "?[pathname, count(passage_id)] := xpath[neuron, passage_id, pathname]",
+    );
 
     json!({
         "passages": total,
@@ -423,16 +435,17 @@ pub fn passages_report(events: &[&Stored], limit: usize) -> serde_json::Value {
 /// inner join — same reasoning `timeseries` already applies by merging three
 /// separate bucketed queries in Rust instead of one.
 fn visit_breakdown(src: &LocalSource, rel: &str, col: &str, limit: usize) -> serde_json::Value {
+    let key_rule = if rel == "ksrc" { RULE_KSRC } else { RULE_KCHAN };
     let visits: BTreeMap<String, u64> = q(
         src,
-        &format!("{PASSAGE_RULES}?[{col}, count(passage_id)] := {rel}[neuron, passage_id, {col}]"),
+        &format!("{RULE_KT}{key_rule}?[{col}, count(passage_id)] := {rel}[neuron, passage_id, {col}]"),
     )
     .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
     .unwrap_or_default();
     let views: BTreeMap<String, u64> = q(
         src,
         &format!(
-            "{PASSAGE_RULES}?[{col}, sum(views)] := {rel}[neuron, passage_id, {col}], vpq[neuron, passage_id, views]"
+            "{RULE_KT}{key_rule}{RULE_VPQ}?[{col}, sum(views)] := {rel}[neuron, passage_id, {col}], vpq[neuron, passage_id, views]"
         ),
     )
     .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
@@ -440,7 +453,7 @@ fn visit_breakdown(src: &LocalSource, rel: &str, col: &str, limit: usize) -> ser
     let attn: BTreeMap<String, u64> = q(
         src,
         &format!(
-            "{PASSAGE_RULES}?[{col}, sum(ms)] := {rel}[neuron, passage_id, {col}], apq[neuron, passage_id, ms]"
+            "{RULE_KT}{key_rule}{RULE_APQ}?[{col}, sum(ms)] := {rel}[neuron, passage_id, {col}], apq[neuron, passage_id, ms]"
         ),
     )
     .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
