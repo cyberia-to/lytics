@@ -18,7 +18,7 @@ visitor browser                     server                       reader
 ┌─────────────────┐   HTTPS   ┌──────────────────┐        ┌──────────────┐
 │ loader.js ~2KB  │  ───────► │ ingest (axum)    │        │ dashboard    │
 │  capture + queue│           │  verify sig+pow  │        │ leptos/trunk │
-│ core.wasm ≤64KB │           │  ua · geo · ref  │  ───►  │  d3 widgets  │
+│ core.wasm ~44KB │           │  ua · geo · ref  │  ───►  │  d3 widgets  │
 │  keys·sign·pow  │           │  cast signal     │        └──────────────┘
 └─────────────────┘           │ cell (cybergraph)│              ▲
                               │  bbg state·time  │              │
@@ -29,7 +29,7 @@ visitor browser                     server                       reader
 | component | language | role |
 |---|---|---|
 | loader | JS module, ~2 KB source | fires on page load, captures pageview + SPA route changes instantly, runs the attention sensor, queues events until the core is ready |
-| core | Rust → wasm, ~59 KB gzip / ~49 KB brotli measured | keygen, per-domain derivation, secp256k1 signing, PoW; loaded async so page performance never waits on crypto |
+| core | Rust → wasm, ~53 KB gzip / ~44 KB brotli measured | keygen, per-domain derivation, secp256k1 signing, PoW; loaded async so page performance never waits on crypto |
 | ingest | Rust, axum | signature + PoW verification, replay dedup, UA parsing, MaxMind geo (ip read, used, discarded), referrer→source attribution, adaptive difficulty, signal casting into the cell |
 | store | [[cybergraph]] cell + [[bbg]] | the ingest service embeds a cell in-process; events enter as signed signals, bbg holds the state and its time dimension indexes the stream |
 | query | [[inf]] datalog over bbg | timeseries, top-N, passages, retention, funnels — each report is one inf rule; the path is live: cybergraph already runs inf over bbg state in-process |
@@ -48,25 +48,32 @@ stay in Rust — JS is confined to the bootstrap the platform requires and the
 sensor the platform exposes.
 
 on core size: the original ≤64 KB budget did not survive contact with the
-primitives, but four cuts brought the core from ~172 KB to ~59 KB gzip
-(~49 KB brotli): the 2048-word list left the hot path (the secret is 32
-bytes of entropy fed straight to BIP32 — the BIP39 mnemonic is a lazy
-backup encoding in `words.js`, loaded only on export/import); k256 and
-bip32 were trimmed to sign-and-derive only (no pkcs8/pem/serde/schnorr/ecdh,
-no bs58, no precomputed tables); serde_json left entirely — `encode_body`
-is a hand-written canonical encoder pinned byte-for-byte to the serde_json
-output by parity tests, so the signing path carries no JSON machinery and
-no float formatting; and `wasm-opt -Oz` ran over the result. what remains
-is the honest floor: secp256k1 signing (k256, the largest piece) plus
-Poseidon2 (hemera, a mere ~3 KB) for the event hash and PoW. it loads async
-and gates nothing — the loader captures the first pageview and the whole
-attention stream before the core compiles, then signs the queue
-retroactively. the deepest remaining lever is a hand-rolled minimal
-secp256k1, or moving signing to `@noble/secp256k1` in JS (~4 KB, same
-curve) — deferred; the curve stays secp256k1 either way so the mudra bridge
-and on-chain identity hold.
+primitives, but five cuts brought the core from ~172 KB to ~53 KB gzip
+(~44 KB brotli):
 
-first-load transfer, measured: ~66 KB gzip / ~55 KB brotli total (wasm +
+1. the 2048-word list left the hot path — the secret is raw 32-byte entropy,
+   and the BIP39 mnemonic is a lazy backup in `words.js`, loaded only on
+   export/import.
+2. k256 was trimmed to sign-and-derive only (no pkcs8/pem/serde/schnorr/ecdh,
+   no precomputed tables).
+3. serde_json left entirely — `encode_body` is a hand-written canonical
+   encoder pinned byte-for-byte to the serde_json output by parity tests, so
+   the signing path carries no JSON machinery and no float formatting.
+4. BIP32 gave way to a hemera KDF (`d = Hemera(entropy ‖ 0x00 ‖ domain) mod
+   n`), dropping HMAC-SHA512 and bip32 — one hash where a derivation ladder
+   was.
+5. `wasm-opt -Oz` ran over the result.
+
+what remains is the honest floor: secp256k1 signing (k256, now the largest
+piece) plus Poseidon2 (hemera, a mere ~3 KB) for the event hash, the KDF,
+and PoW. it loads async and gates nothing — the loader captures the first
+pageview and the whole attention stream before the core compiles, then signs
+the queue retroactively. the deepest remaining lever is a hand-rolled
+minimal secp256k1, or moving signing to `@noble/secp256k1` in JS (~4 KB,
+same curve) — deferred; the curve stays secp256k1 either way so the mudra
+bridge and on-chain identity hold.
+
+first-load transfer, measured: ~60 KB gzip / ~50 KB brotli total (wasm +
 wasm-bindgen glue + loader), one time, then served from cache. the loader
 is a JS module; `words.js` (~6 KB brotli, the wordlist) transfers only when
 a visitor exports or imports their identity.
@@ -76,56 +83,46 @@ parameterized reports only — raw datalog never faces the open internet.
 
 ## identity pipeline
 
-keys follow the [[mudra]] bridge (`mudra/specs/bridge.md`), with the seed
-taken as raw entropy so the wordlist stays off the signing path:
+the secret is 32 bytes of entropy; each domain derives its own secp256k1
+key from it through one hemera hash — the stack's own hash, no BIP32/BIP39
+ladder on the signing path:
 
 ```text
-32-byte entropy ──BIP-32──▶ secp256k1 key (per-domain child)
-                                    │
-           compressed pubkey (33 B) ◀┘
+d = Hemera(entropy ‖ 0x00 ‖ domain) mod n      per-domain secret scalar
+pubkey = d·G                                    SEC1-compressed (33 B)
                     │
   bech32(hrp, ripemd160(sha256(pubkey)))  = neuron (wire form)
-  Hemera(compressed_pubkey)               = native neuron id (32 B)
+  Hemera(pubkey)                          = native neuron id (32 B)
 
   entropy ◀──BIP-39 (lazy, words.js)──▶ 24-word backup   (import/export only)
 ```
 
-the 32-byte entropy is the secret; it feeds BIP32 directly, skipping the
-BIP39 PBKDF2 stretch. the mnemonic is a display encoding of that entropy —
-standard BIP39 word/checksum, so it round-trips with any BIP39 tool at the
-entropy level — computed by `words.js` only when the visitor backs up or
-imports. (skipping PBKDF2 means a standard wallet importing the phrase
-derives a different *seed*; the claim path is key-level via mudra, and the
-lytics import reconstructs the exact entropy.)
+per-domain unlinkability comes from the hash: a distinct `domain` yields an
+independent scalar, so two sites observe two unlinkable neurons and a
+leaked per-domain key reveals nothing about the others — the same property
+BIP32 hardening gave, without BIP32's HMAC-SHA512 weight in the wasm. the
+`0x00` separator keeps `(entropy, domain)` pairs from colliding by
+concatenation. `domain` is the registrable domain (eTLD+1 per the public
+suffix list), so one site's subdomains see one neuron. reducing the 32-byte
+digest mod n carries ~2⁻¹²⁸ bias (n ≈ 2²⁵⁶) and is zero with probability
+~2⁻²⁵⁶ — negligible; the reduced scalar is a valid key. the wire hrp
+defaults to `lytics` and is a deployment setting.
 
-per-domain derivation folds the domain into the account level:
-`account' = u31(Hemera(domain))`, path `m/0'/0'/account'/0/0` — one
-seed, one hardened child per domain, so two sites observe two unlinkable
-neurons. `domain` is the registrable domain (eTLD+1 per the public suffix
-list), so one site's subdomains see one neuron. u31 truncation admits a
-rare collision — two domains, one child key — with probability ~n²/2³²
-over a visitor's n sites; accepted for v1. the wire hrp defaults to
-`lytics` and is a deployment setting.
+why a hemera KDF, not BIP32: lytics neurons are freshly minted keys that
+never lived in a BIP32 wallet, and the per-domain path was custom anyway
+(`account = Hemera(domain)`), so no standard wallet reproduced these keys
+regardless. dropping BIP32 for a single hemera hash is smaller (no
+sha512/bip32 in the wasm), cyber-native (one hash across the whole stack),
+and recovers with a one-line formula — `d = Hemera(entropy ‖ 0x00 ‖ domain)
+mod n` — that any tool with hemera and secp256k1 reproduces from the
+entropy. the entropy backup stays standard BIP39 (words.js, lazy): the
+phrase round-trips the 32-byte entropy with any BIP39 tool; only the
+key-stretching is ours.
 
-why this path: the shape is BIP32 five levels deep — purpose, namespace,
-account, change, index — with every constant zeroed. lytics neurons are
-freshly minted keys; inheriting bitcoin's purpose (44') and the SLIP-44
-coin registry (118') would import a foreign gatekeeper for keys that
-never lived in those wallets. cyber starts its registries at zero: `0'`
-purpose, `0'` namespace, `0/0` tail — one domain, one neuron. the account
-level carries the domain because hardening is the unlinkability: a leaked
-child key or parent xpub reveals no sibling domains, while the unhardened
-change and index levels would let one xpub enumerate a visitor's neurons
-everywhere. recovery needs only BIP32 itself — any tool that accepts a
-custom path derives the neuron from mnemonic + domain — and the mudra
-claim is key-level, so the zero path bridges into the native graph
-unchanged. the alternative (HKDF per domain outside BIP32) drops the u31
-collision but leaves the derivation-path ecosystem entirely; lytics pays
-31 bits to stay inside it.
-events are signed in ADR-036 shape, and the claim is key-level (any
-secp256k1 key qualifies, path plays no part), so the existing mudra claim
-(`legacy address → native neuron`) carries any lytics neuron into the
-native graph unchanged.
+events are signed in ADR-036 shape, and the mudra claim is key-level (any
+secp256k1 key qualifies — no derivation path is part of it), so the
+existing bridge claim (`legacy address → native neuron`) carries any lytics
+neuron into the native graph unchanged.
 
 ## event schema
 
@@ -250,7 +247,7 @@ visitor.
 | referrer→source engine | plausible core (AGPL) + snowplow referer db | clean reimplementation in Rust; behavior parity, fresh code |
 | geo | `maxminddb` crate + GeoLite2 | same lookup plausible uses |
 | ua parsing | `uaparser`/`woothee` crate | device class, browser, os |
-| identity pipeline | [[mudra]] bridge (`mudra/specs/bridge.md`) | BIP39 → BIP32 → secp256k1 → bech32, neuron = Hemera(pubkey), ADR-036 signing — the existing bridge claim carries a lytics neuron into the native graph |
+| identity pipeline | [[mudra]] bridge (`mudra/specs/bridge.md`) | entropy → Hemera KDF → secp256k1 → bech32, neuron = Hemera(pubkey), ADR-036 signing — the existing bridge claim carries a lytics neuron into the native graph |
 | pow + hashing | [[hemera]] Poseidon2 | event hash and PoW share the stack's native hash — a lytics event hash is already a particle hash |
 
 ## repo layout

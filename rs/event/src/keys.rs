@@ -3,19 +3,18 @@
 // crystal-type: source
 // crystal-domain: cyber
 // ---
-//! identity pipeline — 32-byte entropy → BIP32 `m/0'/0'/account'/0/0` → secp256k1.
+//! identity pipeline — 32-byte entropy → hemera KDF → secp256k1.
 //!
-//! zero-based path: cyber starts its registries at zero. the account level
-//! carries the domain (`account' = u31(Hemera(domain))`) because hardening
-//! is the unlinkability. spec: lytics/specs/README.md, identity pipeline.
-//!
-//! the secret is 32 bytes of entropy fed straight to BIP32 — no BIP39
-//! PBKDF2 stretch on the signing path, so the 2048-word list never enters
-//! the tracker wasm. the mnemonic is a display/backup encoding of that
-//! entropy, behind the `mnemonic` feature, loaded lazily only for
-//! import/export. spec: identity pipeline.
+//! per-domain secret scalar `d = Hemera(entropy ‖ 0x00 ‖ domain) mod n`,
+//! pubkey `d·G`. one hash — the stack's own — replaces BIP32's HMAC-SHA512
+//! ladder: unlinkability across domains comes from the hash (distinct domain
+//! → independent scalar), the same property BIP32 hardening gave, and the
+//! signing path carries no sha512/bip32 weight. the secret is raw entropy
+//! (no BIP39 PBKDF2 stretch), so the 2048-word list never enters the tracker
+//! wasm; the mnemonic is a lazy display/backup encoding behind the
+//! `mnemonic` feature. spec: lytics/specs/README.md, identity pipeline.
 
-use bip32::{DerivationPath, XPrv};
+use k256::elliptic_curve::ops::Reduce;
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 
@@ -58,12 +57,19 @@ impl std::fmt::Debug for Neuron {
     }
 }
 
-/// `u31(Hemera(domain))` — the hardened account index for a domain.
-/// `domain` must already be the registrable domain (eTLD+1).
-pub fn domain_account(domain: &str) -> u32 {
-    let h = hemera::hash(domain.as_bytes());
-    let b = h.as_bytes();
-    u32::from_be_bytes([b[0], b[1], b[2], b[3]]) & 0x7fff_ffff
+/// the per-domain secret scalar: `Hemera(entropy ‖ 0x00 ‖ domain) mod n`.
+/// `domain` must already be the registrable domain (eTLD+1); the 0x00 byte
+/// separates entropy from domain so no `(entropy, domain)` pair collides
+/// with another by concatenation.
+fn domain_scalar(entropy: &[u8; 32], domain: &str) -> k256::Scalar {
+    let mut input = Vec::with_capacity(33 + domain.len());
+    input.extend_from_slice(entropy);
+    input.push(0x00);
+    input.extend_from_slice(domain.as_bytes());
+    let h = hemera::hash(&input);
+    // reduce the 32-byte digest mod n; bias is ~2^-128 (n ≈ 2^256), the
+    // digest is zero with probability ~2^-256 — reduce yields a valid key
+    <k256::Scalar as Reduce<k256::U256>>::reduce(k256::U256::from_be_slice(h.as_bytes()))
 }
 
 impl Seed {
@@ -107,13 +113,9 @@ impl Seed {
 
     /// derive the neuron a given domain observes.
     pub fn neuron(&self, domain: &str, hrp: &str) -> Result<Neuron, KeyError> {
-        let account = domain_account(domain);
-        let path: DerivationPath = format!("m/0'/0'/{account}'/0/0")
-            .parse()
-            .map_err(|e: bip32::Error| KeyError::Derivation(e.to_string()))?;
-        let xprv = XPrv::derive_from_path(self.entropy, &path)
+        let scalar = domain_scalar(&self.entropy, domain);
+        let signing = k256::ecdsa::SigningKey::from_bytes(&scalar.to_bytes())
             .map_err(|e| KeyError::Derivation(e.to_string()))?;
-        let signing = k256::ecdsa::SigningKey::from(xprv.private_key().clone());
         Ok(Neuron::from_signing(signing, hrp))
     }
 }
@@ -165,9 +167,10 @@ mod tests {
     }
 
     #[test]
-    fn account_index_is_u31() {
-        assert!(domain_account("example.com") < (1 << 31));
-        assert!(domain_account("cyber.page") < (1 << 31));
+    fn domain_scalar_is_deterministic_and_domain_bound() {
+        let e = [3u8; 32];
+        assert_eq!(domain_scalar(&e, "example.com"), domain_scalar(&e, "example.com"));
+        assert_ne!(domain_scalar(&e, "example.com"), domain_scalar(&e, "cyber.page"));
     }
 
     #[test]
