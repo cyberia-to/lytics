@@ -12,7 +12,7 @@
 //!   lytics-agent load   <server> <domain> <events> <neurons> — throughput gate
 
 use lytics_event::{
-    canonical_json, event_hash, sign_body, solve, Actor, Attention, Event, EventBody, Kind,
+    encode_body, event_hash, sign_body, solve, Actor, Attention, Event, EventBody, Kind,
     Navigation, Pow, Seed,
 };
 use std::time::Instant;
@@ -67,7 +67,7 @@ fn build_event(
         revenue: None,
         timestamp,
     };
-    let bytes = canonical_json(&body).expect("canonical");
+    let bytes = encode_body(&body);
     let hash = event_hash(&bytes);
     let nonce = solve(&hash, target);
     let (pubkey, signature) = sign_body(neuron.signing_key(), &bytes, &neuron.bech32);

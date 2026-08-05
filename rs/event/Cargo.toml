@@ -11,15 +11,18 @@ license.workspace = true
 description = "lytics event core — canonical encoding, hemera hash, pow, keys, adr-036 signing"
 
 [features]
-# the 2048-word list + PBKDF2 path, needed only for import/export — off on
-# the tracker signing path so the wordlist never enters the core wasm.
-default = ["mnemonic"]
+# both features are native conveniences the tracker wasm omits: `mnemonic`
+# is the wordlist/PBKDF2 backup path, `json` is the serde_json canonicalizer
+# (the hand-written encode_body is the real signing path). off in the core
+# → neither the wordlist nor serde_json enters the wasm.
+default = ["mnemonic", "json"]
 mnemonic = ["dep:bip39"]
+json = ["dep:serde_json"]
 
 [dependencies]
 hemera.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, optional = true }
 thiserror.workspace = true
 k256.workspace = true
 bip32.workspace = true

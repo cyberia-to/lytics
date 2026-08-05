@@ -14,8 +14,10 @@ pub mod keys;
 pub mod pow;
 pub mod sign;
 
-pub use canonical::{canonical_json, CanonicalError};
-pub use event::{Actor, AgentDecl, Attention, Event, EventBody, Kind, Navigation, Pow, Revenue};
+pub use canonical::{encode_body, CanonicalError};
+#[cfg(feature = "json")]
+pub use canonical::canonical_json;
+pub use event::{Actor, AgentDecl, Attention, Event, EventBody, Kind, Navigation, Pow, Prop, Revenue};
 pub use keys::{Neuron, Seed};
 pub use pow::{solve, verify as pow_verify, target_from_difficulty};
 pub use sign::{b64_encode, sign_body, verify as sig_verify, SignError};

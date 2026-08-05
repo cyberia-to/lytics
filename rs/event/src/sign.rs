@@ -18,8 +18,6 @@ use crate::keys::bech32_of_pubkey;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignError {
-    #[error("canonical: {0}")]
-    Canonical(#[from] crate::CanonicalError),
     #[error("base64: {0}")]
     Base64(String),
     #[error("pubkey: {0}")]
@@ -37,24 +35,19 @@ pub fn b64_encode(bytes: &[u8]) -> String {
     B64.encode(bytes)
 }
 
-/// the ADR-036 sign doc for a body, canonical-encoded.
+/// the ADR-036 sign doc for a body, canonical-encoded. hand-written so the
+/// signing path never links serde_json; keys are already in sorted order at
+/// every level, matching serde_json's canonical output byte-for-byte (a
+/// parity test pins this).
 fn sign_doc(body_bytes: &[u8], signer_bech32: &str) -> Vec<u8> {
-    let doc = serde_json::json!({
-        "account_number": "0",
-        "chain_id": "",
-        "fee": {"amount": [], "gas": "0"},
-        "memo": "",
-        "msgs": [{
-            "type": "sign/MsgSignData",
-            "value": {
-                "data": B64.encode(body_bytes),
-                "signer": signer_bech32,
-            }
-        }],
-        "sequence": "0",
-    });
-    // the doc contains no floats by construction
-    crate::canonical_json(&doc).expect("sign doc is canonical")
+    let mut s = String::from(
+        r#"{"account_number":"0","chain_id":"","fee":{"amount":[],"gas":"0"},"memo":"","msgs":[{"type":"sign/MsgSignData","value":{"data":"#,
+    );
+    crate::canonical::escape_into(&mut s, &B64.encode(body_bytes));
+    s.push_str(r#","signer":"#);
+    crate::canonical::escape_into(&mut s, signer_bech32);
+    s.push_str(r#"}}],"sequence":"0"}"#);
+    s.into_bytes()
 }
 
 /// sign canonical body bytes; returns (base64 pubkey, base64 signature).

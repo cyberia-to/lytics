@@ -84,7 +84,7 @@ fn ingest(
     ua: Option<&str>,
     ip: Option<std::net::IpAddr>,
 ) -> Result<(&'static str, String), Reject> {
-    let body_bytes = event.body_bytes().map_err(|e| Reject::Bad(e.to_string()))?;
+    let body_bytes = event.body_bytes();
     let hash = event_hash(&body_bytes);
     let hash_hex = hex::encode(hash);
 
@@ -477,7 +477,7 @@ mod tests {
             revenue: None,
             timestamp: now_ms(),
         };
-        let body_bytes = lytics_event::canonical_json(&body).unwrap();
+        let body_bytes = lytics_event::encode_body(&body);
         let hash = event_hash(&body_bytes);
         let nonce = solve(&hash, target);
         let (pubkey, signature) = lytics_event::sign_body(n.signing_key(), &body_bytes, &n.bech32);
@@ -511,7 +511,7 @@ mod tests {
         let mut ev = signed_event(&seed, "/a", app.cfg.enroll_target);
         ev.body.pathname = "/tampered".into();
         // re-solve pow so the failure isolates to the signature
-        let bytes = lytics_event::canonical_json(&ev.body).unwrap();
+        let bytes = lytics_event::encode_body(&ev.body);
         let h = event_hash(&bytes);
         ev.pow.nonce = solve(&h, app.cfg.enroll_target);
         assert!(matches!(ingest(&mut app, ev, None, None), Err(Reject::Auth(_))));

@@ -11,8 +11,8 @@
 //! compute over strings and bytes so it stays testable off-browser.
 
 use lytics_event::{
-    canonical_json, event_hash, sign_body, solve, Actor, AgentDecl, Attention, Event, EventBody,
-    Kind, Navigation, Pow, Seed,
+    encode_body, event_hash, sign_body, solve, Actor, AgentDecl, Attention, EventBody, Kind,
+    Navigation, Seed,
 };
 use wasm_bindgen::prelude::*;
 
@@ -65,82 +65,77 @@ impl Tracker {
         self.bech32.clone()
     }
 
-    /// build a signed, pow-carrying event, ready to POST. `spec_json` is the
-    /// loader's event description; `target` is the server's current target.
+    /// build a signed, pow-carrying event as a ready-to-POST JSON string.
+    /// fields come as explicit args (no JSON parse in the wasm); the wire
+    /// JSON is hand-assembled from the canonical body (no serde_json). the
+    /// loader owns the field values, so it could equally assemble the POST
+    /// itself — returning the full JSON keeps u64 nonce/difficulty exact.
     #[wasm_bindgen]
-    pub fn build_event(&self, spec_json: &str, target: u64) -> Result<String, String> {
-        let spec: EventSpec = serde_json::from_str(spec_json).map_err(|e| e.to_string())?;
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_event(
+        &self,
+        kind: &str,
+        pathname: &str,
+        navigation: Option<String>,
+        referrer: Option<String>,
+        attention_ms: Option<f64>,
+        scroll_depth: Option<u32>,
+        agent_name: Option<String>,
+        agent_operator: Option<String>,
+        timestamp: f64,
+        target: u64,
+    ) -> Result<String, String> {
         let neuron = self.seed.neuron(&self.domain, &self.hrp).map_err(|e| e.to_string())?;
-        let body = spec.into_body(&self.bech32, &self.domain)?;
-        let bytes = canonical_json(&body).map_err(|e| e.to_string())?;
-        let hash = event_hash(&bytes);
-        let nonce = solve(&hash, target);
-        let (pubkey, signature) = sign_body(neuron.signing_key(), &bytes, &self.bech32);
-        debug_assert_eq!(pubkey, self.pubkey_b64);
-        let event = Event { body, pow: Pow { nonce, difficulty: target }, pubkey, signature };
-        serde_json::to_string(&event).map_err(|e| e.to_string())
-    }
-}
-
-/// the loader's view of an event before signing.
-#[derive(serde::Deserialize)]
-struct EventSpec {
-    kind: String,
-    #[serde(default)]
-    pathname: String,
-    #[serde(default)]
-    navigation: Option<String>,
-    #[serde(default)]
-    referrer: Option<String>,
-    #[serde(default)]
-    attention_ms: Option<u64>,
-    #[serde(default)]
-    scroll_depth: Option<u8>,
-    #[serde(default)]
-    agent: Option<AgentSpec>,
-    #[serde(default)]
-    timestamp: u64,
-}
-
-#[derive(serde::Deserialize)]
-struct AgentSpec {
-    name: String,
-    operator: String,
-}
-
-impl EventSpec {
-    fn into_body(self, neuron: &str, domain: &str) -> Result<EventBody, String> {
-        let kind = match self.kind.as_str() {
+        let kind = match kind {
             "pageview" => Kind::Pageview,
             "attention" => Kind::Attention,
             other => Kind::Custom(other.to_string()),
         };
-        let navigation = match self.navigation.as_deref() {
+        let navigation = match navigation.as_deref() {
             Some("external") => Some(Navigation::External),
             Some("direct") => Some(Navigation::Direct),
             Some("internal") => Some(Navigation::Internal),
             _ => None,
         };
-        let attention = self.attention_ms.map(|ms| Attention {
-            ms,
-            scroll_depth: self.scroll_depth.unwrap_or(0),
+        let attention = attention_ms.map(|ms| Attention {
+            ms: ms as u64,
+            scroll_depth: scroll_depth.unwrap_or(0) as u8,
         });
-        let agent = self.agent.map(|a| AgentDecl { name: a.name, operator: a.operator });
-        Ok(EventBody {
-            neuron: neuron.to_string(),
+        let agent = match (agent_name, agent_operator) {
+            (Some(name), Some(operator)) => Some(AgentDecl { name, operator }),
+            _ => None,
+        };
+        let body = EventBody {
+            neuron: self.bech32.clone(),
             actor: if agent.is_some() { Actor::Agent } else { Actor::Human },
             agent,
             kind,
             navigation,
-            hostname: domain.to_string(),
-            pathname: self.pathname,
-            referrer: self.referrer,
+            hostname: self.domain.clone(),
+            pathname: pathname.to_string(),
+            referrer,
             utm: None,
             attention,
             props: None,
             revenue: None,
-            timestamp: self.timestamp,
-        })
+            timestamp: timestamp as u64,
+        };
+
+        let bytes = encode_body(&body);
+        let hash = event_hash(&bytes);
+        let nonce = solve(&hash, target);
+        let (pubkey, signature) = sign_body(neuron.signing_key(), &bytes, &self.bech32);
+        debug_assert_eq!(pubkey, self.pubkey_b64);
+
+        // wire event = canonical body object + pow + pubkey + signature.
+        // pubkey/signature are base64 (JSON-safe alphabet), nonce/difficulty
+        // written as integer literals so u64 stays exact across the boundary.
+        let mut wire = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+        wire.pop(); // drop the closing brace of the body object
+        wire.push_str(&format!(
+            r#","pow":{{"difficulty":{target},"nonce":{nonce}}},"pubkey":"{pubkey}","signature":"{signature}"}}"#
+        ));
+        Ok(wire)
     }
 }
 
@@ -157,13 +152,20 @@ mod tests {
     #[test]
     fn builds_a_verifiable_event() {
         let t = Tracker::new(ENTROPY, "cyber.page", "lytics").unwrap();
-        let spec = r#"{"kind":"pageview","pathname":"/","navigation":"external","timestamp":1}"#;
-        let json = t.build_event(spec, lytics_event::target_from_difficulty(8)).unwrap();
-        let event: Event = serde_json::from_str(&json).unwrap();
-        let bytes = event.body_bytes().unwrap();
+        let json = t
+            .build_event(
+                "pageview", "/", Some("external".into()), None, None, None, None, None, 1.0,
+                lytics_event::target_from_difficulty(8),
+            )
+            .unwrap();
+        // the wasm ships without serde_json; the test parses via a dev-dep to
+        // confirm the hand-built wire JSON is well-formed and verifiable
+        let event: lytics_event::Event = serde_json::from_str(&json).unwrap();
+        let bytes = event.body_bytes();
         // signature verifies and the neuron field matches the derived key
         lytics_event::sig_verify(&bytes, &event.body.neuron, &event.pubkey, &event.signature, "lytics").unwrap();
         assert_eq!(event.body.neuron, t.neuron());
+        assert_eq!(event.body.kind, lytics_event::Kind::Pageview);
     }
 
     #[test]

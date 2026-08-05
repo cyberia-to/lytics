@@ -13,6 +13,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// a typed custom-property value — flat, no nesting, integers only. replaces
+/// `serde_json::Value` so the tracker wasm never links serde_json.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Prop {
+    Str(String),
+    Int(i64),
+    Bool(bool),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Actor {
@@ -92,7 +102,7 @@ pub struct EventBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attention: Option<Attention>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub props: Option<BTreeMap<String, serde_json::Value>>,
+    pub props: Option<BTreeMap<String, Prop>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revenue: Option<Revenue>,
     /// unix milliseconds
@@ -120,7 +130,7 @@ pub struct Event {
 }
 
 impl Event {
-    pub fn body_bytes(&self) -> Result<Vec<u8>, crate::CanonicalError> {
-        crate::canonical_json(&self.body)
+    pub fn body_bytes(&self) -> Vec<u8> {
+        crate::encode_body(&self.body)
     }
 }

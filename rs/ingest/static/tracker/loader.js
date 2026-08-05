@@ -61,8 +61,20 @@ function currentTarget() {
 }
 async function send(spec) {
   const target = currentTarget();
-  // wasm returns a signed, pow-carrying event as JSON
-  const json = tracker.build_event(JSON.stringify(spec), target);
+  // wasm signs + pow's from explicit args and returns the ready-to-POST JSON
+  // (no JSON parse in the wasm; nothing to stringify here)
+  const json = tracker.build_event(
+    spec.kind,
+    spec.pathname,
+    spec.navigation ?? undefined,
+    spec.referrer ?? undefined,
+    spec.attention_ms ?? undefined,
+    spec.scroll_depth ?? undefined,
+    spec.agent_name ?? undefined,
+    spec.agent_operator ?? undefined,
+    spec.timestamp,
+    target,
+  );
   const r = await fetch(`${ENDPOINT}/api/event`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: json, keepalive: true,
