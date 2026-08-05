@@ -9,7 +9,7 @@
                 font-family: ui-monospace, monospace;
                 background: #000;
                 color: #f0f0f0;
-                max-width: 48rem;
+                max-width: 52rem;
                 margin: 2rem auto;
                 padding: 0 1rem;
             }
@@ -22,6 +22,11 @@
                 color: #06b6d4;
                 font-size: 1rem;
                 margin-top: 1.6rem;
+            }
+            h2 small {
+                color: #555;
+                font-weight: 400;
+                margin-left: 0.5rem;
             }
             table {
                 width: 100%;
@@ -37,19 +42,30 @@
             th {
                 color: #888;
             }
+            td.num {
+                text-align: right;
+                font-variant-numeric: tabular-nums;
+            }
             #ov {
                 display: flex;
-                gap: 1.5rem;
+                gap: 1rem;
                 flex-wrap: wrap;
             }
             #ov div {
                 border: 1px solid #222;
                 padding: 0.6rem 1rem;
+                min-width: 5.5rem;
             }
             #ov b {
                 display: block;
                 font-size: 1.3rem;
                 color: #22c55e;
+            }
+            #ov span.sub {
+                display: block;
+                font-size: 0.7rem;
+                color: #555;
+                margin-top: 0.15rem;
             }
             #meta {
                 color: #666;
@@ -63,52 +79,64 @@
             small.tagline {
                 color: #666;
             }
+            .hint {
+                color: #444;
+                font-size: 0.75rem;
+                margin-top: 0.35rem;
+            }
         </style>
     </head>
     <body>
         <h1>📈 lytics</h1>
         <small class="tagline"
-            >every visitor is a neuron — symbolic dashboard, the engine is the
-            product</small
+            >every visitor is a neuron — visits, not sessions</small
         >
         <div id="meta">loading window…</div>
         <div id="ov"></div>
-        <h2>particles</h2>
-        <table id="particles"></table>
-        <h2>sources</h2>
+        <p class="hint">
+            visit = stream from one external entry to the next · depth =
+            views/visit · dwell = attention/visit
+        </p>
+
+        <h2>visits by source <small>where attention came from</small></h2>
         <table id="sources"></table>
-        <h2>channels</h2>
+
+        <h2>visits by channel <small>direct · referral · social · …</small></h2>
         <table id="channels"></table>
+
+        <h2>particles <small>pages</small></h2>
+        <table id="particles"></table>
+
         <h2>actors</h2>
         <table id="actors"></table>
+
         <script>
-            // page is served under /lytics/ — keep API relative to that prefix
             const root = location.pathname.replace(/\/?$/, "/");
             const get = (name, extra = "") =>
                 fetch(`${root}api/report/${name}${extra}`).then((r) =>
                     r.json(),
                 );
 
-            const fmt = (ms) =>
-                ms >= 60000
-                    ? `${Math.round(ms / 60000)}m`
-                    : `${Math.round(ms / 1000)}s`;
+            const fmt = (ms) => {
+                if (ms == null || ms === 0) return "0s";
+                if (ms >= 60000) return `${(ms / 60000).toFixed(1)}m`;
+                if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+                return `${ms}ms`;
+            };
+
+            const fmtDepth = (milli) =>
+                milli == null ? "—" : (milli / 1000).toFixed(2);
 
             const fmtDay = (ms) => {
                 const d = new Date(ms);
-                const y = d.getUTCFullYear();
-                const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-                const day = String(d.getUTCDate()).padStart(2, "0");
-                return `${y}-${m}-${day}`;
+                return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
             };
 
-            const fmtStamp = (ms) => {
-                const d = new Date(ms);
-                return d
+            const fmtStamp = (ms) =>
+                new Date(ms)
                     .toISOString()
                     .replace("T", " ")
                     .replace(/\.\d{3}Z$/, " UTC");
-            };
 
             function rows(el, header, data, cols) {
                 el.innerHTML =
@@ -116,7 +144,12 @@
                     data
                         .map(
                             (r) =>
-                                `<tr>${cols.map((c) => `<td>${r[c] ?? ""}</td>`).join("")}</tr>`,
+                                `<tr>${cols
+                                    .map(
+                                        ([c, cls]) =>
+                                            `<td class="${cls || ""}">${r[c] ?? ""}</td>`,
+                                    )
+                                    .join("")}</tr>`,
                         )
                         .join("");
             }
@@ -131,53 +164,104 @@
                     ` → <time datetime="${new Date(to).toISOString()}">${fmtDay(to)}</time>` +
                     ` · UTC · as of <time datetime="${new Date(asOf).toISOString()}">${fmtStamp(asOf)}</time>`;
 
-                // visits = passages (entry→next entry). arrivals stay internal.
+                const depth = fmtDepth(o.views_per_visit_milli);
+                const dwell = fmt(o.attention_ms_per_visit);
+                const spv = o.single_page_visits ?? 0;
+                const visits = o.visits ?? 0;
+                const bounce =
+                    visits > 0 ? `${Math.round((spv / visits) * 100)}%` : "—";
+
                 document.getElementById("ov").innerHTML = [
-                    ["neurons", o.neurons],
-                    ["views", o.views],
-                    ["visits", o.visits],
-                    ["attention", fmt(o.attention_ms)],
-                    ["agents", o.agent_neurons],
+                    ["neurons", o.neurons, "distinct keys"],
+                    ["views", o.views, "pages seen"],
+                    ["visits", o.visits, "entries (no 30m timeout)"],
+                    ["depth", depth, "views / visit"],
+                    ["dwell", dwell, "attention / visit"],
+                    ["1-page", bounce, `${spv} single-page visits`],
+                    ["attention", fmt(o.attention_ms), "total looking"],
+                    ["agents", o.agent_neurons, "declared agents"],
                 ]
-                    .map(([k, v]) => `<div><b>${v}</b>${k}</div>`)
+                    .map(
+                        ([k, v, sub]) =>
+                            `<div><b>${v ?? "—"}</b>${k}<span class="sub">${sub}</span></div>`,
+                    )
                     .join("");
+
+                const mapVisitRow = (r) => ({
+                    name: r.source ?? r.channel ?? r.key,
+                    visits: r.visits,
+                    views: r.views,
+                    depth: fmtDepth(r.views_per_visit_milli),
+                    dwell: fmt(r.attention_ms_per_visit),
+                    attention: fmt(r.attention_ms),
+                });
+
+                rows(
+                    document.getElementById("sources"),
+                    [
+                        "source",
+                        "visits",
+                        "views",
+                        "depth",
+                        "dwell",
+                        "attention",
+                    ],
+                    (await get("sources")).map(mapVisitRow),
+                    [
+                        ["name", ""],
+                        ["visits", "num"],
+                        ["views", "num"],
+                        ["depth", "num"],
+                        ["dwell", "num"],
+                        ["attention", "num"],
+                    ],
+                );
+
+                rows(
+                    document.getElementById("channels"),
+                    [
+                        "channel",
+                        "visits",
+                        "views",
+                        "depth",
+                        "dwell",
+                        "attention",
+                    ],
+                    (await get("channels")).map(mapVisitRow),
+                    [
+                        ["name", ""],
+                        ["visits", "num"],
+                        ["views", "num"],
+                        ["depth", "num"],
+                        ["dwell", "num"],
+                        ["attention", "num"],
+                    ],
+                );
 
                 rows(
                     document.getElementById("particles"),
                     ["path", "views", "attention"],
                     (await get("particles")).map((p) => ({
-                        ...p,
+                        pathname: p.pathname,
+                        views: p.views,
                         attention_ms: fmt(p.attention_ms),
                     })),
-                    ["pathname", "views", "attention_ms"],
+                    [
+                        ["pathname", ""],
+                        ["views", "num"],
+                        ["attention_ms", "num"],
+                    ],
                 );
-                rows(
-                    document.getElementById("sources"),
-                    ["source", "visits"],
-                    (await get("sources")).map((r) => ({
-                        source: r.source,
-                        visits: r.visits ?? r.arrivals,
-                    })),
-                    ["source", "visits"],
-                );
-                rows(
-                    document.getElementById("channels"),
-                    ["channel", "visits"],
-                    (await get("channels")).map((r) => ({
-                        channel: r.channel,
-                        visits: r.visits ?? r.arrivals,
-                    })),
-                    ["channel", "visits"],
-                );
+
                 const a = await get("actors");
                 document.getElementById("actors").innerHTML =
                     `<tr><th>actor</th><th>neurons</th><th>views</th></tr>` +
-                    `<tr><td>human</td><td>${a.human.neurons}</td><td>${a.human.views}</td></tr>` +
-                    `<tr><td>agent</td><td>${a.agent.neurons}</td><td>${a.agent.views}</td></tr>` +
+                    `<tr><td>human</td><td class="num">${a.human.neurons}</td><td class="num">${a.human.views}</td></tr>` +
+                    `<tr><td>agent</td><td class="num">${a.agent.neurons}</td><td class="num">${a.agent.views}</td></tr>` +
                     (a.agent.declared || [])
                         .map(
                             (d) =>
-                                `<tr><td>· ${d.name}</td><td></td><td>${d.views}</td></tr>`,
+                                `<tr><td>· ${d.name}</td><td></td><td class="num">${d.views}</td></tr>`,
                         )
                         .join("");
             }

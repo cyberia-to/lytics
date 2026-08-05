@@ -131,13 +131,30 @@ pub fn overview(events: &[&Stored]) -> serde_json::Value {
         .len();
     // visit = passage (stream from one external entry to the next). arrivals
     // stay an internal event label for attribution; the public count is visits.
-    let visits = passages(events).len();
+    let p = passages(events);
+    let visits = p.len();
+    // depth / dwell: pageviews and attention per visit (integer milli-precision)
+    let views_per_visit_milli = if visits > 0 {
+        (views as u64 * 1000) / visits as u64
+    } else {
+        0
+    };
+    let attention_ms_per_visit = if visits > 0 {
+        attention / visits as u64
+    } else {
+        0
+    };
+    // single-page visits (classic bounce-shaped, but visit-bounded)
+    let single_page_visits = p.iter().filter(|v| v.views() <= 1).count();
     json!({
         "neurons": distinct_neurons(events),
         "views": views,
         "visits": visits,
         "attention_ms": attention,
         "agent_neurons": agents,
+        "views_per_visit_milli": views_per_visit_milli,
+        "attention_ms_per_visit": attention_ms_per_visit,
+        "single_page_visits": single_page_visits,
     })
 }
 
@@ -200,37 +217,67 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
     json!(out)
 }
 
+/// visits by source, with views + attention rolled up from each visit's events.
 pub fn sources(events: &[&Stored], limit: usize) -> serde_json::Value {
-    let arrivals: Vec<&Stored> = events.iter().filter(|e| e.is_arrival()).copied().collect();
-    let rows = top_counts(
-        &arrivals,
-        |e| {
-            Some(
-                e.attribution
-                    .source
-                    .clone()
-                    .unwrap_or_else(|| "direct".into()),
-            )
-        },
-        limit,
-    );
-    json!(
-        rows.into_iter()
-            .map(|(s, n)| json!({"source": s, "visits": n}))
-            .collect::<Vec<_>>()
-    )
+    visit_breakdown(events, limit, |e| {
+        e.attribution
+            .source
+            .clone()
+            .unwrap_or_else(|| "direct".into())
+    })
 }
 
+/// visits by channel (same rollup as sources).
 pub fn channels(events: &[&Stored]) -> serde_json::Value {
-    let arrivals: Vec<&Stored> = events.iter().filter(|e| e.is_arrival()).copied().collect();
-    let rows = top_counts(
-        &arrivals,
-        |e| Some(format!("{:?}", e.attribution.channel).to_lowercase()),
-        32,
-    );
+    visit_breakdown(events, 32, |e| {
+        format!("{:?}", e.attribution.channel).to_lowercase()
+    })
+}
+
+/// group visits by a key taken from the visit's first arrival (or first event).
+fn visit_breakdown<F: Fn(&Stored) -> String>(
+    events: &[&Stored],
+    limit: usize,
+    key_of: F,
+) -> serde_json::Value {
+    // source key → (visits, views, attention_ms)
+    let mut map: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
+    for pass in passages(events) {
+        let key = pass
+            .events
+            .iter()
+            .find(|e| e.is_arrival())
+            .or_else(|| pass.events.first())
+            .map(|e| key_of(e))
+            .unwrap_or_else(|| "unknown".into());
+        let slot = map.entry(key).or_default();
+        slot.0 += 1;
+        slot.1 += pass.views() as u64;
+        slot.2 += pass.events.iter().map(|e| e.attention_ms()).sum::<u64>();
+    }
+    let mut rows: Vec<_> = map.into_iter().collect();
+    rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+    rows.truncate(limit);
     json!(
         rows.into_iter()
-            .map(|(c, n)| json!({"channel": c, "visits": n}))
+            .map(|(k, (visits, views, att))| {
+                let vpv_milli = if visits > 0 {
+                    (views * 1000) / visits
+                } else {
+                    0
+                };
+                let att_pv = if visits > 0 { att / visits } else { 0 };
+                json!({
+                    "key": k,
+                    "source": k,
+                    "channel": k,
+                    "visits": visits,
+                    "views": views,
+                    "attention_ms": att,
+                    "views_per_visit_milli": vpv_milli,
+                    "attention_ms_per_visit": att_pv,
+                })
+            })
             .collect::<Vec<_>>()
     )
 }
