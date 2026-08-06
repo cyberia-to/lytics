@@ -437,34 +437,33 @@ fn passages_totals(src: &LocalSource) -> (u64, u64) {
     (total, views_total)
 }
 
-/// visit-derived counters for `overview`: visits (= total passages),
-/// views/attention per visit (integer milli-precision), and single-page
-/// visits — passages with at most one pageview, including passages with
-/// zero (a passage can be opened by a non-pageview custom event and never
-/// see one; the Rust reference this replaces counted those as "single-page"
-/// too, so this matches it exactly via `total - multi_page`, not
-/// `count(views <= 1)`, which `vpq` cannot express for the zero case since a
-/// zero-view passage has no `vpq` row at all).
-fn visit_metrics(events: &[&Stored], views: u64, attention_ms: u64) -> serde_json::Value {
+/// visit-derived counters for `overview`:
+/// - visits (= total passages)
+/// - depth = views/visit (milli)
+/// - dwell = attention/visit
+/// - attention/neuron — mean looking time per unique key (the juice)
+///
+/// single-page / bounce is intentionally absent: it confuses bots with
+/// humans and does not answer "what happened".
+fn visit_metrics(
+    events: &[&Stored],
+    views: u64,
+    attention_ms: u64,
+    neurons: u64,
+) -> serde_json::Value {
     let src = passage_source(events);
     let (visits, _) = passages_totals(&src);
-    let multi_page = scalar(
-        &src,
-        &format!(
-            "{RULE_VPQ}many[neuron, passage_id] := vpq[neuron, passage_id, views], gt(views, 1)\n?[count(passage_id)] := many[neuron, passage_id]"
-        ),
-    ) as u64;
-    let single_page_visits = visits.saturating_sub(multi_page);
     let views_per_visit_milli = views
         .checked_mul(1000)
         .and_then(|v| v.checked_div(visits))
         .unwrap_or(0);
     let attention_ms_per_visit = attention_ms.checked_div(visits).unwrap_or(0);
+    let attention_ms_per_neuron = attention_ms.checked_div(neurons).unwrap_or(0);
     json!({
         "visits": visits,
         "views_per_visit_milli": views_per_visit_milli,
         "attention_ms_per_visit": attention_ms_per_visit,
-        "single_page_visits": single_page_visits,
+        "attention_ms_per_neuron": attention_ms_per_neuron,
     })
 }
 
@@ -597,7 +596,17 @@ fn visit_breakdown(src: &LocalSource, rel: &str, col: &str, limit: usize) -> ser
                 .and_then(|x| x.checked_div(*v))
                 .unwrap_or(0);
             let att_pv = att.checked_div(*v).unwrap_or(0);
-            (k.clone(), neurons, *v, views, att, vpv_milli, att_pv)
+            let att_pn = att.checked_div(neurons).unwrap_or(0);
+            (
+                k.clone(),
+                neurons,
+                *v,
+                views,
+                att,
+                vpv_milli,
+                att_pv,
+                att_pn,
+            )
         })
         .collect();
     // juice: unique neurons first, then visits
@@ -606,7 +615,7 @@ fn visit_breakdown(src: &LocalSource, rel: &str, col: &str, limit: usize) -> ser
     json!(
         rows.into_iter()
             .map(
-                |(k, neurons, visits, views, att, vpv_milli, att_pv)| json!({
+                |(k, neurons, visits, views, att, vpv_milli, att_pv, att_pn)| json!({
                     "key": k,
                     "source": k,
                     "channel": k,
@@ -616,6 +625,7 @@ fn visit_breakdown(src: &LocalSource, rel: &str, col: &str, limit: usize) -> ser
                     "attention_ms": att,
                     "views_per_visit_milli": vpv_milli,
                     "attention_ms_per_visit": att_pv,
+                    "attention_ms_per_neuron": att_pn,
                 })
             )
             .collect::<Vec<_>>()
@@ -720,8 +730,9 @@ pub fn overview(events: &[&Stored]) -> serde_json::Value {
     let mut o = overview_counts(events);
     let views = o["views"].as_u64().unwrap_or(0);
     let attention = o["attention_ms"].as_u64().unwrap_or(0);
-    let visits = visit_metrics(events, views, attention);
-    if let (Some(obj), Some(v)) = (o.as_object_mut(), visits.as_object()) {
+    let neurons = o["neurons"].as_u64().unwrap_or(0);
+    let derived = visit_metrics(events, views, attention, neurons);
+    if let (Some(obj), Some(v)) = (o.as_object_mut(), derived.as_object()) {
         for (k, val) in v {
             obj.insert(k.clone(), val.clone());
         }
@@ -842,12 +853,21 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
         .into_iter()
         .map(|(path, neurons, visits, pv)| {
             let att = attention.get(&path).copied().unwrap_or(0);
+            let vpv_milli = pv
+                .checked_mul(1000)
+                .and_then(|x| x.checked_div(visits))
+                .unwrap_or(0);
+            let att_pv = att.checked_div(visits).unwrap_or(0);
+            let att_pn = att.checked_div(neurons).unwrap_or(0);
             json!({
                 "pathname": path,
                 "neurons": neurons,
                 "visits": visits,
                 "views": pv,
                 "attention_ms": att,
+                "views_per_visit_milli": vpv_milli,
+                "attention_ms_per_visit": att_pv,
+                "attention_ms_per_neuron": att_pn,
             })
         })
         .collect();
@@ -942,12 +962,23 @@ fn dim_funnel(src: &LocalSource, rel: &str, col: &str, limit: usize) -> Vec<serd
     .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
     .unwrap_or_default();
 
+    // attention ms tagged with this dim
+    let attn: BTreeMap<String, u64> = q(
+        src,
+        &format!(
+            r#"?[{col}, sum(ms)] := {rel}{{{col}, neuron, ts}}, events{{neuron, ts, kind: "attention", ms}}"#
+        ),
+    )
+    .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+    .unwrap_or_default();
+
     let mut rows: Vec<_> = neurons
         .into_iter()
         .map(|(k, n)| {
             let visits = visits.get(&k).copied().unwrap_or(0);
             let views = views.get(&k).copied().unwrap_or(0);
-            (k, n, visits, views)
+            let att = attn.get(&k).copied().unwrap_or(0);
+            (k, n, visits, views, att)
         })
         .collect();
     // juice order: unique people, then visits, then views
@@ -959,12 +990,22 @@ fn dim_funnel(src: &LocalSource, rel: &str, col: &str, limit: usize) -> Vec<serd
     });
     rows.truncate(limit);
     rows.into_iter()
-        .map(|(k, neurons, visits, views)| {
+        .map(|(k, neurons, visits, views, att)| {
+            let vpv_milli = views
+                .checked_mul(1000)
+                .and_then(|x| x.checked_div(visits))
+                .unwrap_or(0);
+            let att_pv = att.checked_div(visits).unwrap_or(0);
+            let att_pn = att.checked_div(neurons).unwrap_or(0);
             json!({
                 col: k,
                 "neurons": neurons,
                 "visits": visits,
                 "views": views,
+                "attention_ms": att,
+                "views_per_visit_milli": vpv_milli,
+                "attention_ms_per_visit": att_pv,
+                "attention_ms_per_neuron": att_pn,
             })
         })
         .collect()
@@ -1384,6 +1425,7 @@ mod tests {
         assert_eq!(us["neurons"], 2);
         assert_eq!(us["views"], 3); // 3 pageviews in US
         assert_eq!(us["visits"], 3); // all three are arrivals
+        assert!(us.get("attention_ms_per_neuron").is_some());
     }
 
     #[test]
@@ -1648,7 +1690,8 @@ mod tests {
         let inf = overview(&r);
         assert_eq!(inf, reference);
         assert_eq!(inf["visits"], 3); // n1: 1 passage, n2: 1, n3: 1
-        assert_eq!(inf["single_page_visits"], 2); // n2 and n3, not n1 (2 views)
+        assert!(inf.get("single_page_visits").is_none()); // bounce metric retired
+        assert!(inf["attention_ms_per_neuron"].as_u64().is_some());
     }
 
     #[test]

@@ -149,6 +149,7 @@ pub fn overview(events: &[&Stored]) -> serde_json::Value {
     // stay an internal event label for attribution; the public count is visits.
     let p = passages(events);
     let visits = p.len();
+    let neurons = distinct_neurons(events);
     // depth / dwell: pageviews and attention per visit (integer milli-precision)
     let views_per_visit_milli = if visits > 0 {
         (views as u64 * 1000) / visits as u64
@@ -160,17 +161,20 @@ pub fn overview(events: &[&Stored]) -> serde_json::Value {
     } else {
         0
     };
-    // single-page visits (classic bounce-shaped, but visit-bounded)
-    let single_page_visits = p.iter().filter(|v| v.views() <= 1).count();
+    let attention_ms_per_neuron = if neurons > 0 {
+        attention / neurons as u64
+    } else {
+        0
+    };
     json!({
-        "neurons": distinct_neurons(events),
+        "neurons": neurons,
         "views": views,
         "visits": visits,
         "attention_ms": attention,
         "agent_neurons": agents,
         "views_per_visit_milli": views_per_visit_milli,
         "attention_ms_per_visit": attention_ms_per_visit,
-        "single_page_visits": single_page_visits,
+        "attention_ms_per_neuron": attention_ms_per_neuron,
     })
 }
 
@@ -251,12 +255,21 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
         .into_iter()
         .map(|(path, neurons, visits, pv)| {
             let att = attention.get(&path).copied().unwrap_or(0);
+            let vpv = pv
+                .checked_mul(1000)
+                .and_then(|x| x.checked_div(visits))
+                .unwrap_or(0);
+            let att_pv = att.checked_div(visits).unwrap_or(0);
+            let att_pn = att.checked_div(neurons).unwrap_or(0);
             json!({
                 "pathname": path,
                 "neurons": neurons,
                 "visits": visits,
                 "views": pv,
                 "attention_ms": att,
+                "views_per_visit_milli": vpv,
+                "attention_ms_per_visit": att_pv,
+                "attention_ms_per_neuron": att_pn,
             })
         })
         .collect();
@@ -318,6 +331,7 @@ fn visit_breakdown<F: Fn(&Stored) -> String>(
             .map(|(k, neurons, visits, views, att)| {
                 let vpv_milli = (views * 1000).checked_div(visits).unwrap_or(0);
                 let att_pv = att.checked_div(visits).unwrap_or(0);
+                let att_pn = att.checked_div(neurons).unwrap_or(0);
                 json!({
                     "key": k,
                     "source": k,
@@ -328,6 +342,7 @@ fn visit_breakdown<F: Fn(&Stored) -> String>(
                     "attention_ms": att,
                     "views_per_visit_milli": vpv_milli,
                     "attention_ms_per_visit": att_pv,
+                    "attention_ms_per_neuron": att_pn,
                 })
             })
             .collect::<Vec<_>>()
@@ -366,6 +381,7 @@ fn dim_funnel_ref(
     let mut neurons: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
     let mut views: BTreeMap<String, u64> = BTreeMap::new();
     let mut visits: BTreeMap<String, u64> = BTreeMap::new();
+    let mut attn: BTreeMap<String, u64> = BTreeMap::new();
     for e in events {
         let Some(k) = key(e) else { continue };
         neurons
@@ -378,6 +394,7 @@ fn dim_funnel_ref(
         if e.is_arrival() {
             *visits.entry(k.clone()).or_default() += 1;
         }
+        *attn.entry(k.clone()).or_default() += e.attention_ms();
     }
     let mut rows: Vec<_> = neurons
         .into_iter()
@@ -385,7 +402,8 @@ fn dim_funnel_ref(
             let n = set.len() as u64;
             let visits = visits.get(&k).copied().unwrap_or(0);
             let views = views.get(&k).copied().unwrap_or(0);
-            (k, n, visits, views)
+            let att = attn.get(&k).copied().unwrap_or(0);
+            (k, n, visits, views, att)
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -396,8 +414,23 @@ fn dim_funnel_ref(
     });
     rows.truncate(limit);
     rows.into_iter()
-        .map(|(k, neurons, visits, views)| {
-            json!({"key": k, "neurons": neurons, "visits": visits, "views": views})
+        .map(|(k, neurons, visits, views, att)| {
+            let vpv = views
+                .checked_mul(1000)
+                .and_then(|x| x.checked_div(visits))
+                .unwrap_or(0);
+            let att_pv = att.checked_div(visits).unwrap_or(0);
+            let att_pn = att.checked_div(neurons).unwrap_or(0);
+            json!({
+                "key": k,
+                "neurons": neurons,
+                "visits": visits,
+                "views": views,
+                "attention_ms": att,
+                "views_per_visit_milli": vpv,
+                "attention_ms_per_visit": att_pv,
+                "attention_ms_per_neuron": att_pn,
+            })
         })
         .collect()
 }

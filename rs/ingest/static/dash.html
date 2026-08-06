@@ -419,8 +419,9 @@
             <div class="section-label">overview</div>
             <div class="stat-grid" id="ov"></div>
             <p class="hint">
-                visit = one external entry → next · depth = views/visit · dwell
-                = attention/visit · 1-page = single-view visits
+                core: neurons → visits → views · derivatives: depth =
+                views/visit · dwell = attention/visit · att/neuron = total
+                looking per unique key
             </p>
 
             <div class="section-label">pulse</div>
@@ -660,21 +661,20 @@
                 document.getElementById("logo-suffix").textContent =
                     `cyberstates · ${w.label} · ${fmtDay(from)} → ${fmtDay(to)}`;
 
+                // core funnel: neurons → visits → views
+                // derivatives: depth, dwell, attention, attention/neuron
                 const depth = fmtDepth(o.views_per_visit_milli);
                 const dwell = fmt(o.attention_ms_per_visit);
-                const spv = o.single_page_visits ?? 0;
-                const visits = o.visits ?? 0;
-                const bounce =
-                    visits > 0 ? `${Math.round((spv / visits) * 100)}%` : "—";
+                const attN = fmt(o.attention_ms_per_neuron);
 
                 document.getElementById("ov").innerHTML = cards([
-                    ["NEURONS", o.neurons, "distinct visitors", ""],
-                    ["VIEWS", o.views, "pages seen", "cyan"],
+                    ["NEURONS", o.neurons, "unique keys", ""],
                     ["VISITS", o.visits, "entries · no timeout", "yellow"],
+                    ["VIEWS", o.views, "pages seen", "cyan"],
                     ["DEPTH", depth, "views / visit", "orange"],
                     ["DWELL", dwell, "attention / visit", "magenta"],
-                    ["1-PAGE", bounce, `${spv} single-page visits`, ""],
                     ["ATTENTION", fmt(o.attention_ms), "total looking", "cyan"],
+                    ["ATT / NEURON", attN, "looking per unique key", "magenta"],
                 ]);
 
                 // pulse
@@ -712,28 +712,26 @@
                 // top pages — funnel + attention
                 table(
                     document.getElementById("particles"),
-                    ["PATH", "NEURONS", "VISITS", "VIEWS", "ATTENTION", "AVG"],
-                    (await get("particles", "?limit=40")).map((p) => {
-                        const avg =
-                            p.views > 0
-                                ? fmt(Math.round(p.attention_ms / p.views))
-                                : "—";
-                        return {
-                            pathname: shortPath(p.pathname),
-                            neurons: p.neurons ?? "—",
-                            visits: p.visits ?? "—",
-                            views: p.views,
-                            attention_ms: fmt(p.attention_ms),
-                            avg,
-                        };
-                    }),
+                    ["PATH", "NEURONS", "VISITS", "VIEWS", "DEPTH", "DWELL", "ATT/N", "ATTENTION"],
+                    (await get("particles", "?limit=40")).map((p) => ({
+                        pathname: shortPath(p.pathname),
+                        neurons: p.neurons ?? "—",
+                        visits: p.visits ?? "—",
+                        views: p.views,
+                        depth: fmtDepth(p.views_per_visit_milli),
+                        dwell: fmt(p.attention_ms_per_visit),
+                        att_n: fmt(p.attention_ms_per_neuron),
+                        attention_ms: fmt(p.attention_ms),
+                    })),
                     [
                         ["pathname", ""],
                         ["neurons", "num"],
                         ["visits", "num"],
                         ["views", "num"],
+                        ["depth", "num"],
+                        ["dwell", "num"],
+                        ["att_n", "num"],
                         ["attention_ms", "num"],
-                        ["avg", "num"],
                     ],
                 );
 
@@ -743,34 +741,43 @@
                     ["neurons", "num"],
                     ["visits", "num"],
                     ["views", "num"],
+                    ["depth", "num"],
+                    ["dwell", "num"],
+                    ["att_n", "num"],
                 ];
                 table(
                     document.getElementById("countries"),
-                    ["COUNTRY", "NEURONS", "VISITS", "VIEWS"],
+                    ["COUNTRY", "NEURONS", "VISITS", "VIEWS", "DEPTH", "DWELL", "ATT/N"],
                     (await get("countries", "?limit=20")).map((r) => ({
                         name: r.country ?? "—",
                         neurons: r.neurons ?? "",
                         visits: r.visits ?? "",
                         views: r.views ?? "",
+                        depth: fmtDepth(r.views_per_visit_milli),
+                        dwell: fmt(r.attention_ms_per_visit),
+                        att_n: fmt(r.attention_ms_per_neuron),
                     })),
                     funnelCols,
                 );
                 const dev = await get("devices", "?limit=20");
-                const classRows = (dev.classes || []).map((r) => ({
-                    name: r.class ?? "—",
+                const mapFunnel = (name, r) => ({
+                    name,
                     neurons: r.neurons ?? "",
                     visits: r.visits ?? "",
                     views: r.views ?? "",
-                }));
-                const browserRows = (dev.browsers || []).slice(0, 8).map((r) => ({
-                    name: r.browser ?? "—",
-                    neurons: r.neurons ?? "",
-                    visits: r.visits ?? "",
-                    views: r.views ?? "",
-                }));
+                    depth: fmtDepth(r.views_per_visit_milli),
+                    dwell: fmt(r.attention_ms_per_visit),
+                    att_n: fmt(r.attention_ms_per_neuron),
+                });
+                const classRows = (dev.classes || []).map((r) =>
+                    mapFunnel(r.class ?? "—", r),
+                );
+                const browserRows = (dev.browsers || [])
+                    .slice(0, 8)
+                    .map((r) => mapFunnel(r.browser ?? "—", r));
                 table(
                     document.getElementById("devices"),
-                    ["CLASS / BROWSER", "NEURONS", "VISITS", "VIEWS"],
+                    ["CLASS / BROWSER", "NEURONS", "VISITS", "VIEWS", "DEPTH", "DWELL", "ATT/N"],
                     [...classRows, ...browserRows],
                     funnelCols,
                 );
@@ -782,6 +789,7 @@
                     views: r.views,
                     depth: fmtDepth(r.views_per_visit_milli),
                     dwell: fmt(r.attention_ms_per_visit),
+                    att_n: fmt(r.attention_ms_per_neuron),
                     attention: fmt(r.attention_ms),
                 });
 
@@ -792,6 +800,7 @@
                     ["views", "num"],
                     ["depth", "num"],
                     ["dwell", "num"],
+                    ["att_n", "num"],
                     ["attention", "num"],
                 ];
 
@@ -804,6 +813,7 @@
                         "VIEWS",
                         "DEPTH",
                         "DWELL",
+                        "ATT/N",
                         "ATTENTION",
                     ],
                     (await get("sources", "?limit=40")).map(mapVisitRow),
@@ -818,6 +828,7 @@
                         "VIEWS",
                         "DEPTH",
                         "DWELL",
+                        "ATT/N",
                         "ATTENTION",
                     ],
                     (await get("channels")).map(mapVisitRow),
