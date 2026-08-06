@@ -224,55 +224,82 @@ fn events_source(events: &[&Stored]) -> LocalSource {
     s
 }
 
-/// per-event passage id (0-based within a neuron): the count of that
-/// neuron's arrivals strictly after its first-ever event and at-or-before
-/// this event's timestamp. a passage opens on every arrival except the
-/// stream's very first event (arrival or not) — which is exactly what "count
-/// of qualifying arrivals" gives: the first event always sees zero arrivals
-/// in `(first_ts, its own ts]` (the boundary is exclusive on the low end),
-/// and every later arrival raises the count for itself and everything after
-/// it, until the next one. this is the same inequality-self-join
-/// running-count trick `retention`/`returns` already use for cohort/offset —
-/// verified directly (see `/tmp/infcheck3`) before writing it here, not
-/// assumed: `inf` has no window/lag primitive, but a passage boundary is
-/// expressible as a count, so it never needed one.
+/// per-event passage id, within a neuron. a passage opens on every arrival
+/// except the stream's very first event (arrival or not).
 ///
-/// events absent from the returned map are passage 0 (no arrival ever
-/// qualified) — callers must default missing keys to 0, not error.
-fn passage_ids(src: &LocalSource, events: &[&Stored]) -> BTreeMap<(String, i64), i64> {
-    let fs = match q(src, "?[neuron, min(ts)] := events{neuron, ts}") {
-        Ok(out) => out,
-        Err(_) => return BTreeMap::new(),
-    };
-    let mut s2 = LocalSource::new();
-    s2.add(
-        "fs",
-        &["neuron", "first"],
-        fs.rows.iter().map(|r| vec![r[0].clone(), r[1].clone()]).collect(),
-    );
-    let mut ts_ev: Vec<Tuple> = events
-        .iter()
-        .map(|e| vec![Value::str(&e.body.neuron), Value::int(e.body.timestamp as i64)])
-        .collect();
-    ts_ev.sort();
-    ts_ev.dedup();
-    s2.add("ts_ev", &["neuron", "ts"], ts_ev);
+/// first version of this function: a running-count self-join, `count of
+/// arrivals strictly after the neuron's first-ever event and at-or-before
+/// this event's own timestamp`. correct, and the natural translation of "no
+/// window/lag primitive" into a count — but it materializes the FULL cross product of
+/// a neuron's own events against its own arrivals before the `gt`/`le`
+/// filters can prune it (`eval_body` computes one atom fully before the
+/// next runs; filter pushdown only affects which atom filters early, not
+/// whether the preceding join step's output existed in memory first). live
+/// production data has one neuron — a crawler that never persists a client
+/// key, so every page it ever hits looks like a fresh direct visit — with
+/// 3123 events, all 3123 of them arrivals. the self-join for that one
+/// neuron alone was ~3123×3123 ≈ 9.75M intermediate bindings: 6.4s and a
+/// multi-GB spike per call, OOM-killing production under real traffic.
+///
+/// replaced with the primitive that actually exists for this: `running_*` +
+/// `:order`, added to inf between the two versions of this function. rank
+/// each neuron's own arrivals by timestamp in one sorted pass —
+/// `?[neuron, ts, running_count(ts)] := arrival_ev{neuron, ts} :order ts` —
+/// O(k log k) per neuron instead of O(k²); the identical 3123-arrival
+/// neuron ranks in ~4ms, not 6.4s (measured, `/tmp/runcheck`, not
+/// committed). every event that is not itself an arrival still needs a
+/// passage id: carry the most recent preceding arrival's rank forward,
+/// event by event in timestamp order — a single O(n) merge over two
+/// already-sorted, already-computed sequences, done in Rust because it is
+/// bookkeeping (like the gap-fill-to-0 pattern already used elsewhere in
+/// this file), not a second aggregation.
+///
+/// numbering note: this carry-forward passage id is off by a constant +1
+/// from the self-join version, *only* for a neuron whose very first event
+/// is itself an arrival (that arrival now ranks 1 instead of being excluded
+/// as the non-boundary-triggering first event). passage id is never in a
+/// report's output — every consumer here only tests equality between two
+/// events' ids, to decide whether they are the same passage — so a uniform
+/// shift changes no grouping and no downstream count. the differential
+/// tests below assert this: every report using passage grouping still
+/// matches the Rust reference's output exactly.
+fn passage_ids(events: &[&Stored]) -> BTreeMap<(String, i64), i64> {
+    let mut src = LocalSource::new();
     let arr_rows: Vec<Tuple> = events
         .iter()
         .filter(|e| e.is_arrival())
         .map(|e| vec![Value::str(&e.body.neuron), Value::int(e.body.timestamp as i64)])
         .collect();
-    s2.add("arrival_ev", &["neuron", "ts"], arr_rows);
+    src.add("arrival_ev", &["neuron", "ts"], arr_rows);
 
-    let script = "mtc[neuron, ts, arrival_ts] := ts_ev{neuron, ts}, fs{neuron, first}, arrival_ev{neuron, ts: arrival_ts}, gt(arrival_ts, first), le(arrival_ts, ts)\n?[neuron, ts, count(arrival_ts)] := mtc[neuron, ts, arrival_ts]";
-    match q(&s2, script) {
+    let ranks: BTreeMap<(String, i64), i64> = match q(
+        &src,
+        "?[neuron, ts, running_count(ts)] := arrival_ev{neuron, ts} :order ts",
+    ) {
         Ok(out) => out
             .rows
             .iter()
             .map(|r| ((as_str(&r[0]), as_i64(&r[1])), as_i64(&r[2])))
             .collect(),
         Err(_) => BTreeMap::new(),
+    };
+
+    let mut per_neuron: BTreeMap<&str, std::collections::BTreeSet<i64>> = BTreeMap::new();
+    for e in events {
+        per_neuron.entry(e.body.neuron.as_str()).or_default().insert(e.body.timestamp as i64);
     }
+
+    let mut out = BTreeMap::new();
+    for (neuron, ts_set) in per_neuron {
+        let mut current = 0i64;
+        for ts in ts_set {
+            if let Some(r) = ranks.get(&(neuron.to_string(), ts)) {
+                current = *r;
+            }
+            out.insert((neuron.to_string(), ts), current);
+        }
+    }
+    out
 }
 
 /// build the passage-scoped source for a report call: `pid{neuron, ts,
@@ -282,8 +309,7 @@ fn passage_ids(src: &LocalSource, events: &[&Stored]) -> BTreeMap<(String, i64),
 /// every entry/exit/rollup query below joins against these three, never
 /// against raw Rust structures.
 fn passage_source(events: &[&Stored]) -> LocalSource {
-    let base = events_source(events);
-    let ids = passage_ids(&base, events);
+    let ids = passage_ids(events);
 
     let mut s = LocalSource::new();
     let mut seen: std::collections::BTreeSet<(String, i64)> = std::collections::BTreeSet::new();
@@ -1131,10 +1157,18 @@ mod tests {
     }
 
     #[test]
-    fn passage_ids_open_new_passage_only_on_arrival_after_the_first_event() {
-        // n1: arrival /a (passage 0), internal /b (still 0), arrival /c
-        // (passage 1), internal /d (still 1). n2: internal /x as the very
-        // first event ever — passage 0 despite not being an arrival.
+    fn passage_ids_groups_correctly_across_a_boundary_regardless_of_label() {
+        // n1: arrival /a, internal /b (same passage as /a), arrival /c
+        // (new passage), internal /d (same passage as /c). n2: internal /x
+        // as the very first event ever — never an arrival, stays one
+        // passage.
+        //
+        // the carry-forward version ranks n1's own first event (an arrival)
+        // starting at 1, not 0 — a uniform +1 label shift from the old
+        // self-join version, present only because n1's stream opens on an
+        // arrival. this asserts what actually matters: /a and /b share an
+        // id, /c and /d share a *different* id, and n2's single event has
+        // its own id — the grouping, not the specific numbers.
         let events = vec![
             pv("n1", "/a", 0),
             pv_internal("n1", "/b", 200),
@@ -1143,14 +1177,43 @@ mod tests {
             pv_internal("n2", "/x", 50),
         ];
         let r = refs(&events);
-        let src = events_source(&r);
-        let ids = passage_ids(&src, &r);
-        assert_eq!(ids.get(&("n1".into(), 300)).copied(), Some(1));
-        assert_eq!(ids.get(&("n1".into(), 400)).copied(), Some(1));
-        // ts=0, 200 and n2's 50 qualify for zero arrivals — absent, defaults to 0
-        assert_eq!(ids.get(&("n1".into(), 0)), None);
-        assert_eq!(ids.get(&("n1".into(), 200)), None);
-        assert_eq!(ids.get(&("n2".into(), 50)), None);
+        let ids = passage_ids(&r);
+        let a = ids[&("n1".to_string(), 0)];
+        let b = ids[&("n1".to_string(), 200)];
+        let c = ids[&("n1".to_string(), 300)];
+        let d = ids[&("n1".to_string(), 400)];
+        let x = ids[&("n2".to_string(), 50)];
+        assert_eq!(a, b, "/a and /b are the same passage");
+        assert_eq!(c, d, "/c and /d are the same passage");
+        assert_ne!(a, c, "the arrival at /c opens a new passage");
+        assert_eq!(x, 0, "n2's stream opens on a non-arrival, unshifted");
+    }
+
+    #[test]
+    fn passage_ids_stays_fast_for_one_neuron_with_thousands_of_arrivals() {
+        // the exact shape that OOM-killed production: a single neuron (a
+        // crawler that never persists a client key, so every page it hits
+        // looks like a fresh direct visit) with thousands of events, every
+        // one an arrival. the self-join version of this function did
+        // ~events×arrivals work for this one neuron alone — 3123×3123 ≈
+        // 9.75M intermediate bindings, 6.4s and several GB, measured
+        // against the real production dataset before this function was
+        // rewritten. this reproduces the shape (smaller, so the test suite
+        // stays fast) and asserts a wall-clock ceiling a quadratic
+        // implementation would blow through.
+        let events: Vec<Stored> = (0..4000u64).map(|i| pv("bot", "/p", i)).collect();
+        let r = refs(&events);
+        let t0 = std::time::Instant::now();
+        let ids = passage_ids(&r);
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed.as_millis() < 2000,
+            "passage_ids took {elapsed:?} for one neuron's 4000 arrivals — quadratic regression?"
+        );
+        assert_eq!(ids.len(), 4000);
+        // every event is its own arrival and its own passage — 4000 distinct ids
+        let distinct: std::collections::BTreeSet<i64> = ids.values().copied().collect();
+        assert_eq!(distinct.len(), 4000);
     }
 
     #[test]
