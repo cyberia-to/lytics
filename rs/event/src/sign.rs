@@ -6,14 +6,12 @@
 //! ADR-036 signing — the mudra bridge signature shape.
 //!
 //! the signed document is the Cosmos offline StdSignDoc wrapping the
-//! canonical body bytes as `sign/MsgSignData`. digest = sha256(doc),
-//! signature = secp256k1 compact (64 B).
+//! canonical body bytes as `sign/MsgSignData`. the doc shape, and the
+//! sign/verify over it, are `mudra::claim::sign_arbitrary`/`verify_arbitrary`
+//! now — this module is the lytics-specific wire format (base64 in/out,
+//! `SignError`) around that shared primitive.
 
-use k256::ecdsa::signature::hazmat::PrehashSigner;
-use k256::ecdsa::{Signature, SigningKey, VerifyingKey};
-use sha2::{Digest, Sha256};
-
-use crate::keys::bech32_of_pubkey;
+use k256::ecdsa::SigningKey;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignError {
@@ -32,32 +30,15 @@ pub fn b64_encode(bytes: &[u8]) -> String {
     crate::b64::encode(bytes)
 }
 
-/// the ADR-036 sign doc for a body, canonical-encoded. hand-written so the
-/// signing path never links serde_json; keys are already in sorted order at
-/// every level, matching serde_json's canonical output byte-for-byte (a
-/// parity test pins this).
-fn sign_doc(body_bytes: &[u8], signer_bech32: &str) -> Vec<u8> {
-    let mut s = String::from(
-        r#"{"account_number":"0","chain_id":"","fee":{"amount":[],"gas":"0"},"memo":"","msgs":[{"type":"sign/MsgSignData","value":{"data":"#,
-    );
-    crate::canonical::escape_into(&mut s, &crate::b64::encode(body_bytes));
-    s.push_str(r#","signer":"#);
-    crate::canonical::escape_into(&mut s, signer_bech32);
-    s.push_str(r#"}}],"sequence":"0"}"#);
-    s.into_bytes()
-}
-
 /// sign canonical body bytes; returns (base64 pubkey, base64 signature).
 pub fn sign_body(
     key: &SigningKey,
     body_bytes: &[u8],
     signer_bech32: &str,
 ) -> (String, String) {
-    let doc = sign_doc(body_bytes, signer_bech32);
-    let digest = Sha256::digest(&doc);
-    let sig: Signature = key.sign_prehash(&digest).expect("sign");
+    let sig = mudra::claim::sign_arbitrary(key, signer_bech32, body_bytes);
     let pubkey = key.verifying_key().to_encoded_point(true);
-    (crate::b64::encode(pubkey.as_bytes()), crate::b64::encode(&sig.to_bytes()))
+    (crate::b64::encode(pubkey.as_bytes()), crate::b64::encode(&sig))
 }
 
 /// verify a wire event's signature: pubkey must hash to the neuron field,
@@ -75,18 +56,20 @@ pub fn verify(
         .as_slice()
         .try_into()
         .map_err(|_| SignError::Pubkey("expected 33 bytes".into()))?;
-    if bech32_of_pubkey(&pubkey, hrp) != neuron_bech32 {
+    if mudra::cosmos::address(&pubkey, hrp).map_err(|e| SignError::Pubkey(e.to_string()))?
+        != neuron_bech32
+    {
         return Err(SignError::SignerMismatch);
     }
-    let vk = VerifyingKey::from_sec1_bytes(&pubkey)
-        .map_err(|e| SignError::Pubkey(e.to_string()))?;
     let sig_bytes =
         crate::b64::decode(signature_b64).ok_or_else(|| SignError::Base64("signature".into()))?;
-    let sig = Signature::from_slice(&sig_bytes).map_err(|_| SignError::Invalid)?;
-    let doc = sign_doc(body_bytes, neuron_bech32);
-    let digest = Sha256::digest(&doc);
-    use k256::ecdsa::signature::hazmat::PrehashVerifier;
-    vk.verify_prehash(&digest, &sig).map_err(|_| SignError::Invalid)
+    let signature: [u8; 64] =
+        sig_bytes.as_slice().try_into().map_err(|_| SignError::Invalid)?;
+    if mudra::claim::verify_arbitrary(&pubkey, neuron_bech32, body_bytes, &signature) {
+        Ok(())
+    } else {
+        Err(SignError::Invalid)
+    }
 }
 
 #[cfg(test)]

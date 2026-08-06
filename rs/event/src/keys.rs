@@ -13,10 +13,13 @@
 //! (no BIP39 PBKDF2 stretch), so the 2048-word list never enters the tracker
 //! wasm; the mnemonic is a lazy display/backup encoding behind the
 //! `mnemonic` feature. spec: lytics/specs/README.md, identity pipeline.
-
-use k256::elliptic_curve::ops::Reduce;
-use ripemd::Ripemd160;
-use sha2::{Digest, Sha256};
+//!
+//! the derivation, bech32 encoding and native-id formula live in
+//! `mudra::domain` now — mudra is the canonical owner of these conventions
+//! cyber-wide (see `mudra/.claude/plans/lytics-domain-identity.md`). this
+//! module is what's actually lytics-specific: the mnemonic import/export
+//! convenience (a display concern, not identity) and the `Seed`/`Neuron`
+//! names this crate's callers already use.
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeyError {
@@ -28,8 +31,14 @@ pub enum KeyError {
     Entropy(String),
 }
 
+impl From<mudra::Error> for KeyError {
+    fn from(e: mudra::Error) -> Self {
+        KeyError::Derivation(e.to_string())
+    }
+}
+
 /// a master seed — the visitor's root identity across all domains: 32 bytes
-/// of entropy, fed directly to BIP32.
+/// of entropy.
 pub struct Seed {
     entropy: [u8; 32],
 }
@@ -42,7 +51,7 @@ impl std::fmt::Debug for Seed {
 
 /// a per-domain neuron: the derived key and its wire identities.
 pub struct Neuron {
-    signing: k256::ecdsa::SigningKey,
+    key: mudra::domain::DomainKey,
     /// SEC1-compressed pubkey, 33 bytes
     pub pubkey: [u8; 33],
     /// bech32 wire form
@@ -55,21 +64,6 @@ impl std::fmt::Debug for Neuron {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Neuron").field("bech32", &self.bech32).finish()
     }
-}
-
-/// the per-domain secret scalar: `Hemera(entropy ‖ 0x00 ‖ domain) mod n`.
-/// `domain` must already be the registrable domain (eTLD+1); the 0x00 byte
-/// separates entropy from domain so no `(entropy, domain)` pair collides
-/// with another by concatenation.
-fn domain_scalar(entropy: &[u8; 32], domain: &str) -> k256::Scalar {
-    let mut input = Vec::with_capacity(33 + domain.len());
-    input.extend_from_slice(entropy);
-    input.push(0x00);
-    input.extend_from_slice(domain.as_bytes());
-    let h = hemera::hash(&input);
-    // reduce the 32-byte digest mod n; bias is ~2^-128 (n ≈ 2^256), the
-    // digest is zero with probability ~2^-256 — reduce yields a valid key
-    <k256::Scalar as Reduce<k256::U256>>::reduce(k256::U256::from_be_slice(h.as_bytes()))
 }
 
 impl Seed {
@@ -113,34 +107,18 @@ impl Seed {
 
     /// derive the neuron a given domain observes.
     pub fn neuron(&self, domain: &str, hrp: &str) -> Result<Neuron, KeyError> {
-        let scalar = domain_scalar(&self.entropy, domain);
-        let signing = k256::ecdsa::SigningKey::from_bytes(&scalar.to_bytes())
-            .map_err(|e| KeyError::Derivation(e.to_string()))?;
-        Ok(Neuron::from_signing(signing, hrp))
+        let key = mudra::domain::DomainKey::derive(&self.entropy, domain, hrp)?;
+        let pubkey = key.pubkey;
+        let bech32 = key.bech32.clone();
+        let native = key.native;
+        Ok(Neuron { key, pubkey, bech32, native })
     }
 }
 
 impl Neuron {
-    fn from_signing(signing: k256::ecdsa::SigningKey, hrp: &str) -> Self {
-        let pubkey_point = signing.verifying_key().to_encoded_point(true);
-        let mut pubkey = [0u8; 33];
-        pubkey.copy_from_slice(pubkey_point.as_bytes());
-        let bech = bech32_of_pubkey(&pubkey, hrp);
-        let native = *hemera::hash(&pubkey).as_bytes();
-        Self { signing, pubkey, bech32: bech, native }
-    }
-
     pub fn signing_key(&self) -> &k256::ecdsa::SigningKey {
-        &self.signing
+        self.key.signing_key()
     }
-}
-
-/// `bech32(hrp, ripemd160(sha256(pubkey)))` — the wire form.
-pub fn bech32_of_pubkey(pubkey: &[u8; 33], hrp: &str) -> String {
-    let sha = Sha256::digest(pubkey);
-    let account_id = Ripemd160::digest(sha);
-    let hrp = bech32::Hrp::parse(hrp).expect("valid hrp");
-    bech32::encode::<bech32::Bech32>(hrp, &account_id).expect("bech32 encode")
 }
 
 #[cfg(test)]
@@ -164,13 +142,6 @@ mod tests {
         let a = seed.neuron("example.com", "lytics").unwrap();
         let b = seed.neuron("cyber.page", "lytics").unwrap();
         assert_ne!(a.bech32, b.bech32);
-    }
-
-    #[test]
-    fn domain_scalar_is_deterministic_and_domain_bound() {
-        let e = [3u8; 32];
-        assert_eq!(domain_scalar(&e, "example.com"), domain_scalar(&e, "example.com"));
-        assert_ne!(domain_scalar(&e, "example.com"), domain_scalar(&e, "cyber.page"));
     }
 
     #[test]

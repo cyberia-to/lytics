@@ -25,9 +25,6 @@ thiserror = "2"
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic", "alloc"] }
 # bip39: only linked via the `mnemonic` feature (import/export), never the core
 bip39 = "2"
-sha2 = "0.10"
-ripemd = "0.1"
-bech32 = "0.11"
 base64 = "0.22"
 getrandom = { version = "0.2", features = ["js"] }
 hex = "0.4"
