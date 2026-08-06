@@ -167,15 +167,15 @@
         <div class="page-frame">
             <div class="header-row1">
                 <div>
-                    <a class="logo" href="/bbg"><span class="mark">◆</span> BBG</a>
+                    <a class="logo" href="/lytics/bbg"><span class="mark">◆</span> BBG</a>
                     <div class="logo-suffix" id="logo-suffix">cyberstates · committed state</div>
                 </div>
                 <div class="nav-row">
                     <a class="nav-btn nav-states" href="/">STATES</a>
                     <a class="nav-btn nav-tokens" href="/tokens">TOKENS</a>
                     <a class="nav-btn nav-lytics" href="/lytics/">LYTICS</a>
-                    <a class="nav-btn nav-bbg nav-here" href="/bbg">BBG</a>
-                    <a class="nav-btn nav-cybergraph" href="/cybergraph">CYBERGRAPH</a>
+                    <a class="nav-btn nav-bbg nav-here" href="/lytics/bbg">BBG</a>
+                    <a class="nav-btn nav-cybergraph" href="/lytics/cybergraph">CYBERGRAPH</a>
                 </div>
             </div>
             <div class="meta-line" id="meta">loading…</div>
@@ -252,9 +252,13 @@
         </div>
 
         <script>
-            const root = "/bbg/".replace(/\/bbg\/$/, "/");
+            // this page is served at `<site-root>/bbg` (e.g. /lytics/bbg
+            // behind cyberstates' nginx rewrite) — derive that root from
+            // location.pathname so the fetch below hits the same backend
+            // this page came from, not the outer site's own /api/.
+            const root = location.pathname.split("/").slice(0, -1).join("/") + "/";
             const get = (name, extra = "") =>
-                fetch(`/api/bbg/report/${name}${extra}`).then((r) => r.json());
+                fetch(`${root}api/bbg/report/${name}${extra}`).then((r) => r.json());
             const short = (h) => (h && h.length > 14 ? h.slice(0, 8) + "…" + h.slice(-4) : h || "");
 
             function table(el, headers, data, cols) {
