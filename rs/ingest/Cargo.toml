@@ -19,7 +19,7 @@ hemera.workspace = true
 # inf datalog (LocalSource), not a bbg-backed source — bbg's canonical
 # dims carry no event fields (pathname/attention/referrer/actor)
 inf-value  = { path = "../../../inf/rs/value" }
-inf-source = { path = "../../../inf/rs/source" }
+inf-source = { path = "../../../inf/rs/source", features = ["bbg"] }
 inf-parse  = { path = "../../../inf/rs/parse" }
 inf-plan   = { path = "../../../inf/rs/plan" }
 inf-eval   = { path = "../../../inf/rs/eval" }

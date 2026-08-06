@@ -8,6 +8,8 @@
 //! spec: lytics/specs/README.md. the payload log is the source of truth;
 //! the cell and the in-memory index are replayed from it at startup.
 
+mod bbg_reports;
+mod cybergraph_reports;
 mod enrich;
 mod geo;
 mod graph;
@@ -530,12 +532,16 @@ async fn main() {
     let router = Router::new()
         .route("/", get(dash))
         .route("/demo", get(demo))
+        .route("/bbg", get(bbg_reports::dash))
+        .route("/cybergraph", get(cybergraph_reports::dash))
         .route("/tracker/{name}", get(tracker_asset))
         .route("/api/event", post(post_event))
         .route("/api/difficulty", get(get_difficulty))
         .route("/api/neuron/{neuron}", delete(delete_neuron))
         .route("/api/query", post(post_query))
         .route("/api/report/{name}", get(get_report))
+        .route("/api/bbg/report/{name}", get(bbg_reports::get_report))
+        .route("/api/cybergraph/report/{name}", get(cybergraph_reports::get_report))
         .with_state(shared);
 
     let addr = format!("0.0.0.0:{port}");

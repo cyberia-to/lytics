@@ -993,6 +993,7 @@ dependencies = [
 name = "inf-source"
 version = "0.1.0"
 dependencies = [
+ "bbg",
  "inf-value",
 ]
 

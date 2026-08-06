@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>bbg — cyberstates</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Play:wght@400;700&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            :root {
+                --cyber-black: #000000;
+                --cyber-green: #00ff41;
+                --cyber-cyan: #00e5ff;
+                --cyber-yellow: #ffd700;
+                --cyber-orange: #ff6600;
+                --cyber-dim: #1a1a1a;
+                --cyber-muted: #333333;
+                --cyber-text: #e0e0e0;
+            }
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            html {
+                overflow-y: scroll;
+                scrollbar-gutter: stable;
+            }
+            body {
+                font-family: "Play", sans-serif;
+                background: var(--cyber-black);
+                color: var(--cyber-text);
+                min-height: 100vh;
+                -webkit-font-smoothing: antialiased;
+            }
+            .page-frame {
+                max-width: 1100px;
+                margin: 0 auto;
+                padding: 20px 24px 80px;
+            }
+            @media (max-width: 640px) {
+                .page-frame { padding: 12px 10px 72px; }
+            }
+            .header-row1 {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 16px;
+                margin-bottom: 8px;
+                flex-wrap: wrap;
+            }
+            .logo {
+                font-size: clamp(22px, 4vw, 32px);
+                font-weight: 700;
+                line-height: 1.1;
+                color: #fff;
+                text-decoration: none;
+            }
+            .logo span.mark { color: var(--cyber-orange); }
+            .logo-suffix {
+                min-height: 14px;
+                line-height: 14px;
+                font-size: 11px;
+                letter-spacing: 3px;
+                text-transform: uppercase;
+                color: rgba(255, 102, 0, 0.55);
+                margin-top: 4px;
+            }
+            .nav-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+            .nav-btn {
+                font-family: "Play", sans-serif;
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 2px;
+                color: #000;
+                text-decoration: none;
+                background: var(--btn-c);
+                border: 1px solid var(--btn-c);
+                padding: 8px 14px;
+                border-radius: 2px;
+                transition: all 0.15s;
+                white-space: nowrap;
+            }
+            .nav-btn:hover { filter: brightness(1.1); }
+            .nav-states { --btn-c: var(--cyber-green); }
+            .nav-tokens { --btn-c: var(--cyber-yellow); }
+            .nav-lytics { --btn-c: var(--cyber-cyan); }
+            .nav-bbg { --btn-c: var(--cyber-orange); }
+            .nav-cybergraph { --btn-c: #ff00ff; }
+            .nav-btn.nav-here { background: transparent; color: var(--btn-c); box-shadow: none; }
+            .meta-line {
+                font-size: 12px;
+                letter-spacing: 1px;
+                color: #555;
+                margin: 8px 0 20px;
+                line-height: 1.6;
+            }
+            .section-label {
+                font-size: 11px;
+                letter-spacing: 3px;
+                text-transform: uppercase;
+                color: #555;
+                margin: 28px 0 12px;
+            }
+            .stat-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+                gap: 12px;
+            }
+            .stat-card {
+                background: #050505;
+                border: 1px solid #1a1a1a;
+                border-radius: 2px;
+                padding: 14px 16px;
+                min-width: 0;
+            }
+            .stat-label {
+                font-size: 10px;
+                letter-spacing: 2px;
+                text-transform: uppercase;
+                color: #555;
+                margin-bottom: 8px;
+            }
+            .stat-value {
+                font-size: clamp(16px, 3vw, 24px);
+                font-weight: 700;
+                color: var(--cyber-orange);
+                font-variant-numeric: tabular-nums;
+                line-height: 1.15;
+            }
+            .stat-hint { font-size: 11px; color: #444; margin-top: 6px; letter-spacing: 0.5px; }
+            .hint { font-size: 12px; color: #3a3a3a; margin: 10px 0 0; letter-spacing: 0.5px; line-height: 1.5; }
+            .table-wrap { overflow-x: auto; margin-top: 4px; border: 1px solid #111; border-radius: 2px; }
+            .cyber-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+            .cyber-table th {
+                background: #050505;
+                border-bottom: 1px solid var(--cyber-muted);
+                padding: 10px 14px;
+                text-align: left;
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 1.5px;
+                text-transform: uppercase;
+                color: var(--cyber-orange);
+                white-space: nowrap;
+            }
+            .cyber-table td {
+                padding: 9px 14px;
+                border-bottom: 1px solid #0e0e0e;
+                white-space: nowrap;
+            }
+            .cyber-table tr:last-child td { border-bottom: none; }
+            .cyber-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+            .cyber-table td.hash { font-family: monospace; color: #888; }
+            .cyber-table .empty { color: #333; font-style: italic; padding: 16px; text-align: center; }
+            .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+            @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+            .footer { margin-top: 60px; font-size: 11px; color: #333; text-align: center; letter-spacing: 1px; }
+            .footer a { color: #555; }
+        </style>
+    </head>
+    <body>
+        <div class="page-frame">
+            <div class="header-row1">
+                <div>
+                    <a class="logo" href="/bbg"><span class="mark">◆</span> BBG</a>
+                    <div class="logo-suffix" id="logo-suffix">cyberstates · committed state</div>
+                </div>
+                <div class="nav-row">
+                    <a class="nav-btn nav-states" href="/">STATES</a>
+                    <a class="nav-btn nav-tokens" href="/tokens">TOKENS</a>
+                    <a class="nav-btn nav-lytics" href="/lytics/">LYTICS</a>
+                    <a class="nav-btn nav-bbg nav-here" href="/bbg">BBG</a>
+                    <a class="nav-btn nav-cybergraph" href="/cybergraph">CYBERGRAPH</a>
+                </div>
+            </div>
+            <div class="meta-line" id="meta">loading…</div>
+
+            <div class="section-label">dimensions</div>
+            <div class="stat-grid" id="ov"></div>
+            <p class="hint">
+                every number here is a real inf datalog query
+                (<code>inf_source::BbgSource</code>) over the actually committed
+                <code>BbgState</code> — not a shadow copy. an empty dimension is
+                the honest answer to "is this used yet", not a bug: lytics casts
+                cyberlinks (structural visitor→page edges), and that alone
+                populates particles/axons/signals — nothing in the current cast
+                path mints a neuron record, or writes a location/coin/card/file.
+            </p>
+
+            <div class="section-label">particles — top by energy</div>
+            <div class="table-wrap"><table class="cyber-table" id="particles"></table></div>
+            <p class="hint">
+                energy = total staked conviction a particle received across every
+                cyberlink addressed to it; weight = conviction on the axon
+                (from→to edge) itself. pi_star/s_yes/s_no/meta_score are focus
+                and valence fields lytics's cast path never writes — shown as
+                they are, not hidden.
+            </p>
+
+            <div class="section-label">axons — most-linked particles</div>
+            <div class="two-col">
+                <div>
+                    <div class="stat-label" style="margin-bottom:8px">top out-degree (from)</div>
+                    <div class="table-wrap"><table class="cyber-table" id="axons-out"></table></div>
+                </div>
+                <div>
+                    <div class="stat-label" style="margin-bottom:8px">top in-degree (to)</div>
+                    <div class="table-wrap"><table class="cyber-table" id="axons-in"></table></div>
+                </div>
+            </div>
+
+            <div class="section-label">neurons — minted records</div>
+            <div class="table-wrap"><table class="cyber-table" id="neurons"></table></div>
+            <p class="hint">
+                focus/karma/stake. lytics never mints a <code>NeuronRecord</code> for a
+                visitor — <code>BbgState::insert</code> only debits an existing one
+                (<code>get_mut</code>, never <code>or_insert</code>) — so this is
+                genuinely empty today, not a query bug.
+            </p>
+
+            <div class="section-label">signals — recent</div>
+            <div class="table-wrap"><table class="cyber-table" id="signals"></table></div>
+
+            <div class="section-label">balances — top</div>
+            <div class="table-wrap"><table class="cyber-table" id="balances"></table></div>
+            <p class="hint">
+                keyed by <code>H(owner ‖ token)</code> — a key does not decode back
+                to a readable owner/token pair without the preimage.
+            </p>
+
+            <div class="section-label">other committed dimensions</div>
+            <div class="two-col">
+                <div>
+                    <div class="stat-label" style="margin-bottom:8px">locations / coins</div>
+                    <div class="table-wrap"><table class="cyber-table" id="loc-coins"></table></div>
+                </div>
+                <div>
+                    <div class="stat-label" style="margin-bottom:8px">cards / files</div>
+                    <div class="table-wrap"><table class="cyber-table" id="cards-files"></table></div>
+                </div>
+            </div>
+
+            <div class="footer">
+                🏴 a <a href="https://cyberia.to">cyberia</a> project ·
+                <a href="https://cyberstates.net">cyberstates.net</a> · raw state, not lytics's product
+            </div>
+        </div>
+
+        <script>
+            const root = "/bbg/".replace(/\/bbg\/$/, "/");
+            const get = (name, extra = "") =>
+                fetch(`/api/bbg/report/${name}${extra}`).then((r) => r.json());
+            const short = (h) => (h && h.length > 14 ? h.slice(0, 8) + "…" + h.slice(-4) : h || "");
+
+            function table(el, headers, data, cols) {
+                if (!data || !data.length) {
+                    el.innerHTML = `<tbody><tr><td class="empty" colspan="${headers.length}">— 0 records</td></tr></tbody>`;
+                    return;
+                }
+                el.innerHTML =
+                    `<thead><tr>${headers.map((h, i) => `<th class="${cols[i][1] || ""}">${h}</th>`).join("")}</tr></thead><tbody>` +
+                    data
+                        .map(
+                            (r) =>
+                                `<tr>${cols.map(([c, cls]) => `<td class="${cls || ""}">${r[c] ?? ""}</td>`).join("")}</tr>`,
+                        )
+                        .join("") +
+                    `</tbody>`;
+            }
+
+            function cards(items) {
+                return items
+                    .map(
+                        ([label, value, hint]) =>
+                            `<div class="stat-card">
+                                <div class="stat-label">${label}</div>
+                                <div class="stat-value">${value ?? "—"}</div>
+                                <div class="stat-hint">${hint || ""}</div>
+                            </div>`,
+                    )
+                    .join("");
+            }
+
+            async function refresh() {
+                const o = await get("overview");
+                document.getElementById("meta").textContent =
+                    `height ${o.height} · root ${short(o.root)}`;
+                document.getElementById("ov").innerHTML = cards([
+                    ["particles", o.particles, "content-addressed nodes"],
+                    ["axons", o.axons, "cyberlink edges"],
+                    ["neurons", o.neurons, "minted records"],
+                    ["signals", o.signals, "committed headers"],
+                    ["balances", o.balances, "nonzero H(owner‖token)"],
+                    ["locations", o.locations, ""],
+                    ["coins", o.coins, ""],
+                    ["cards", o.cards, ""],
+                    ["files", o.files, ""],
+                    ["commitments", o.commitments, "privacy dim"],
+                    ["nullifiers", o.nullifiers, "privacy dim"],
+                    ["intents", o.intents, "uncommitted"],
+                ]);
+
+                const particles = await get("particles", "?limit=20");
+                table(
+                    document.getElementById("particles"),
+                    ["PARTICLE", "ENERGY", "WEIGHT", "PI*", "S_YES", "S_NO", "META"],
+                    particles.map((p) => ({ ...p, particle: short(p.particle) })),
+                    [["particle", "hash"], ["energy", "num"], ["weight", "num"], ["pi_star", "num"], ["s_yes", "num"], ["s_no", "num"], ["meta_score", "num"]],
+                );
+
+                const ax = await get("axons", "?limit=15");
+                table(
+                    document.getElementById("axons-out"),
+                    ["PARTICLE", "DEGREE"],
+                    (ax.out_degree || []).map((r) => ({ ...r, particle: short(r.particle) })),
+                    [["particle", "hash"], ["degree", "num"]],
+                );
+                table(
+                    document.getElementById("axons-in"),
+                    ["PARTICLE", "DEGREE"],
+                    (ax.in_degree || []).map((r) => ({ ...r, particle: short(r.particle) })),
+                    [["particle", "hash"], ["degree", "num"]],
+                );
+
+                const neurons = await get("neurons", "?limit=20");
+                table(
+                    document.getElementById("neurons"),
+                    ["NEURON", "FOCUS", "KARMA", "STAKE"],
+                    neurons.map((n) => ({ ...n, neuron: short(n.neuron) })),
+                    [["neuron", "hash"], ["focus", "num"], ["karma", "num"], ["stake", "num"]],
+                );
+
+                const signals = await get("signals", "?limit=25");
+                table(
+                    document.getElementById("signals"),
+                    ["STEP", "NEURON", "LINKS", "HEIGHT", "PROOF"],
+                    signals.map((s) => ({ ...s, neuron: short(s.neuron), proof_hash: short(s.proof_hash) })),
+                    [["step", "num"], ["neuron", "hash"], ["link_count", "num"], ["block_height", "num"], ["proof_hash", "hash"]],
+                );
+
+                const balances = await get("balances", "?limit=20");
+                table(
+                    document.getElementById("balances"),
+                    ["KEY", "AMOUNT"],
+                    balances.map((b) => ({ ...b, key: short(b.key) })),
+                    [["key", "hash"], ["amount", "num"]],
+                );
+
+                const other = await get("other_dims");
+                const rows = (arr) => (arr || []).map((r) => r.map((v) => (typeof v === "string" && v.length > 14 ? short(v) : v)).join(" / ")).join("<br>") || "— none";
+                document.getElementById("loc-coins").innerHTML =
+                    `<tbody><tr><td class="hash">locations</td><td>${rows(other.locations)}</td></tr><tr><td class="hash">coins</td><td>${rows(other.coins)}</td></tr></tbody>`;
+                document.getElementById("cards-files").innerHTML =
+                    `<tbody><tr><td class="hash">cards</td><td>${rows(other.cards)}</td></tr><tr><td class="hash">files</td><td>${rows(other.files)}</td></tr></tbody>`;
+            }
+
+            refresh();
+            setInterval(refresh, 5000);
+        </script>
+    </body>
+</html>

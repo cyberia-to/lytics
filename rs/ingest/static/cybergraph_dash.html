@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>cybergraph — cyberstates</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Play:wght@400;700&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            :root {
+                --cyber-black: #000000;
+                --cyber-green: #00ff41;
+                --cyber-cyan: #00e5ff;
+                --cyber-yellow: #ffd700;
+                --cyber-magenta: #ff00ff;
+                --cyber-dim: #1a1a1a;
+                --cyber-muted: #333333;
+                --cyber-text: #e0e0e0;
+            }
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            html { overflow-y: scroll; scrollbar-gutter: stable; }
+            body {
+                font-family: "Play", sans-serif;
+                background: var(--cyber-black);
+                color: var(--cyber-text);
+                min-height: 100vh;
+                -webkit-font-smoothing: antialiased;
+            }
+            .page-frame { max-width: 1100px; margin: 0 auto; padding: 20px 24px 80px; }
+            @media (max-width: 640px) { .page-frame { padding: 12px 10px 72px; } }
+            .header-row1 {
+                display: flex; align-items: center; justify-content: space-between;
+                gap: 16px; margin-bottom: 8px; flex-wrap: wrap;
+            }
+            .logo { font-size: clamp(22px, 4vw, 32px); font-weight: 700; line-height: 1.1; color: #fff; text-decoration: none; }
+            .logo span.mark { color: var(--cyber-magenta); }
+            .logo-suffix {
+                min-height: 14px; line-height: 14px; font-size: 11px; letter-spacing: 3px;
+                text-transform: uppercase; color: rgba(255, 0, 255, 0.55); margin-top: 4px;
+            }
+            .nav-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+            .nav-btn {
+                font-family: "Play", sans-serif; font-size: 12px; font-weight: 700; letter-spacing: 2px;
+                color: #000; text-decoration: none; background: var(--btn-c); border: 1px solid var(--btn-c);
+                padding: 8px 14px; border-radius: 2px; transition: all 0.15s; white-space: nowrap;
+            }
+            .nav-btn:hover { filter: brightness(1.1); }
+            .nav-states { --btn-c: var(--cyber-green); }
+            .nav-tokens { --btn-c: var(--cyber-yellow); }
+            .nav-lytics { --btn-c: var(--cyber-cyan); }
+            .nav-bbg { --btn-c: #ff6600; }
+            .nav-cybergraph { --btn-c: var(--cyber-magenta); }
+            .nav-btn.nav-here { background: transparent; color: var(--btn-c); box-shadow: none; }
+            .meta-line { font-size: 12px; letter-spacing: 1px; color: #555; margin: 8px 0 20px; line-height: 1.6; }
+            .section-label { font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: #555; margin: 28px 0 12px; }
+            .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+            .stat-card { background: #050505; border: 1px solid #1a1a1a; border-radius: 2px; padding: 14px 16px; min-width: 0; }
+            .stat-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: #555; margin-bottom: 8px; }
+            .stat-value { font-size: clamp(16px, 3vw, 24px); font-weight: 700; color: var(--cyber-magenta); font-variant-numeric: tabular-nums; line-height: 1.15; }
+            .stat-hint { font-size: 11px; color: #444; margin-top: 6px; letter-spacing: 0.5px; }
+            .hint { font-size: 12px; color: #3a3a3a; margin: 10px 0 0; letter-spacing: 0.5px; line-height: 1.5; }
+            .table-wrap { overflow-x: auto; margin-top: 4px; border: 1px solid #111; border-radius: 2px; }
+            .cyber-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+            .cyber-table th {
+                background: #050505; border-bottom: 1px solid var(--cyber-muted); padding: 10px 14px;
+                text-align: left; font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+                text-transform: uppercase; color: var(--cyber-magenta); white-space: nowrap;
+            }
+            .cyber-table td { padding: 9px 14px; border-bottom: 1px solid #0e0e0e; white-space: nowrap; }
+            .cyber-table tr:last-child td { border-bottom: none; }
+            .cyber-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+            .cyber-table td.hash { font-family: monospace; color: #888; }
+            .cyber-table .empty { color: #333; font-style: italic; padding: 16px; text-align: center; }
+            .feed { display: flex; flex-direction: column; gap: 8px; }
+            .sig-card { background: #050505; border: 1px solid #161616; border-radius: 2px; padding: 12px 14px; }
+            .sig-head {
+                display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+                font-size: 11px; color: #666; margin-bottom: 8px; font-family: monospace;
+            }
+            .sig-head b { color: var(--cyber-cyan); font-family: "Play", sans-serif; }
+            .link-row {
+                font-family: monospace; font-size: 12px; color: #aaa; padding: 3px 0;
+                display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+            }
+            .link-row .arrow { color: var(--cyber-magenta); }
+            .link-row .amt { color: var(--cyber-yellow); margin-left: auto; }
+            .valence-pos { color: var(--cyber-green); }
+            .valence-neg { color: #ff0040; }
+            .valence-zero { color: #555; }
+            .footer { margin-top: 60px; font-size: 11px; color: #333; text-align: center; letter-spacing: 1px; }
+            .footer a { color: #555; }
+        </style>
+    </head>
+    <body>
+        <div class="page-frame">
+            <div class="header-row1">
+                <div>
+                    <a class="logo" href="/cybergraph"><span class="mark">⌬</span> CYBERGRAPH</a>
+                    <div class="logo-suffix" id="logo-suffix">cyberstates · chains + links</div>
+                </div>
+                <div class="nav-row">
+                    <a class="nav-btn nav-states" href="/">STATES</a>
+                    <a class="nav-btn nav-tokens" href="/tokens">TOKENS</a>
+                    <a class="nav-btn nav-lytics" href="/lytics/">LYTICS</a>
+                    <a class="nav-btn nav-bbg" href="/bbg">BBG</a>
+                    <a class="nav-btn nav-cybergraph nav-here" href="/cybergraph">CYBERGRAPH</a>
+                </div>
+            </div>
+            <div class="meta-line" id="meta">loading…</div>
+
+            <div class="section-label">overview</div>
+            <div class="stat-grid" id="ov"></div>
+            <p class="hint">
+                a signal chain is cybergraph's own per-node bookkeeping — step,
+                prev, hash, equivocation-checked — never a bbg dimension. these
+                numbers come straight from <code>Cybergraph.chains</code>, not a
+                query, the same way reading any Rust struct's own fields is not
+                "querying" (see <code>/bbg</code> for what is).
+            </p>
+
+            <div class="section-label">chains — most active</div>
+            <div class="table-wrap"><table class="cyber-table" id="chains"></table></div>
+
+            <div class="section-label">network labels</div>
+            <div class="table-wrap"><table class="cyber-table" id="networks"></table></div>
+            <p class="hint">
+                every signal declares a resolved <code>private_network</code>
+                label (<code>H("network:"+neuron)</code>) — but
+                <code>BbgState::insert</code> does not partition by it, confirmed
+                directly against the evaluator's source. every label below lands
+                in the one shared particles/axons/neurons state this instance
+                holds. shown honestly: this is a routing label today, not
+                isolation.
+            </p>
+
+            <div class="section-label">recent signals</div>
+            <div class="feed" id="signals"></div>
+
+            <div class="footer">
+                🏴 a <a href="https://cyberia.to">cyberia</a> project ·
+                <a href="https://cyberstates.net">cyberstates.net</a> · the semantic layer over bbg
+            </div>
+        </div>
+
+        <script>
+            const get = (name, extra = "") =>
+                fetch(`/api/cybergraph/report/${name}${extra}`).then((r) => r.json());
+            const short = (h) => (h && h.length > 14 ? h.slice(0, 8) + "…" + h.slice(-4) : h || "");
+
+            function table(el, headers, data, cols) {
+                if (!data || !data.length) {
+                    el.innerHTML = `<tbody><tr><td class="empty" colspan="${headers.length}">— 0 records</td></tr></tbody>`;
+                    return;
+                }
+                el.innerHTML =
+                    `<thead><tr>${headers.map((h, i) => `<th class="${cols[i][1] || ""}">${h}</th>`).join("")}</tr></thead><tbody>` +
+                    data
+                        .map((r) => `<tr>${cols.map(([c, cls]) => `<td class="${cls || ""}">${r[c] ?? ""}</td>`).join("")}</tr>`)
+                        .join("") +
+                    `</tbody>`;
+            }
+
+            function cards(items) {
+                return items
+                    .map(
+                        ([label, value, hint]) =>
+                            `<div class="stat-card">
+                                <div class="stat-label">${label}</div>
+                                <div class="stat-value">${value ?? "—"}</div>
+                                <div class="stat-hint">${hint || ""}</div>
+                            </div>`,
+                    )
+                    .join("");
+            }
+
+            function valenceClass(v) {
+                if (v > 0) return "valence-pos";
+                if (v < 0) return "valence-neg";
+                return "valence-zero";
+            }
+
+            async function refresh() {
+                const o = await get("overview");
+                document.getElementById("meta").textContent =
+                    `${o.neurons_with_chains} chains · ${o.total_signals} signals · ${o.distinct_networks} network labels`;
+                document.getElementById("ov").innerHTML = cards([
+                    ["neurons w/ chains", o.neurons_with_chains, "distinct signers"],
+                    ["total signals", o.total_signals, "committed headers"],
+                    ["network labels", o.distinct_networks, "vestigial — see below"],
+                ]);
+
+                const chains = await get("chains", "?limit=15");
+                table(
+                    document.getElementById("chains"),
+                    ["NEURON", "LENGTH", "TIP STEP", "TIP HEIGHT", "TIP HASH"],
+                    chains.map((c) => ({ ...c, neuron: short(c.neuron), tip_hash: short(c.tip_hash) })),
+                    [["neuron", "hash"], ["length", "num"], ["tip_step", "num"], ["tip_height", "num"], ["tip_hash", "hash"]],
+                );
+
+                const networks = await get("networks", "?limit=15");
+                table(
+                    document.getElementById("networks"),
+                    ["NETWORK", "SIGNALS"],
+                    networks.map((n) => ({ ...n, network: short(n.network) })),
+                    [["network", "hash"], ["signals", "num"]],
+                );
+
+                const signals = await get("recent_signals", "?limit=20");
+                const feed = document.getElementById("signals");
+                if (!signals.length) {
+                    feed.innerHTML = `<div class="sig-card">— 0 signals yet</div>`;
+                } else {
+                    feed.innerHTML = signals
+                        .map((s) => {
+                            const links = s.links
+                                .map(
+                                    (l) =>
+                                        `<div class="link-row">
+                                            <span>${short(l.from)}</span>
+                                            <span class="arrow">→</span>
+                                            <span>${short(l.to)}</span>
+                                            <span class="${valenceClass(l.valence)}">v${l.valence >= 0 ? "+" : ""}${l.valence}</span>
+                                            <span class="amt">${l.amount}</span>
+                                        </div>`,
+                                )
+                                .join("");
+                            return `<div class="sig-card">
+                                <div class="sig-head">
+                                    <span><b>${short(s.neuron)}</b> step ${s.step} · height ${s.height} · net ${short(s.network)}</span>
+                                    <span>${s.link_count} link${s.link_count === 1 ? "" : "s"} · ${short(s.hash)}</span>
+                                </div>
+                                ${links || '<div class="link-row">— no links</div>'}
+                            </div>`;
+                        })
+                        .join("");
+                }
+            }
+
+            refresh();
+            setInterval(refresh, 5000);
+        </script>
+    </body>
+</html>
