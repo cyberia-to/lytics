@@ -377,6 +377,69 @@
             .cyber-table a:hover {
                 color: var(--cyber-green);
             }
+            /* path segment tree */
+            .path-cell {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                min-width: 0;
+            }
+            .path-tog {
+                flex: 0 0 auto;
+                width: 18px;
+                height: 18px;
+                padding: 0;
+                border: 1px solid #333;
+                border-radius: 2px;
+                background: #0a0a0a;
+                color: var(--cyber-green);
+                font-size: 11px;
+                font-family: "Play", sans-serif;
+                line-height: 1;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .path-tog:hover {
+                border-color: var(--cyber-green);
+                background: #111;
+            }
+            .path-tog.leaf {
+                visibility: hidden;
+                pointer-events: none;
+            }
+            .path-lab {
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .path-lab.group {
+                color: #fff;
+                font-weight: 700;
+            }
+            .path-lab.child {
+                color: #aaa;
+            }
+            .path-count {
+                flex: 0 0 auto;
+                font-size: 10px;
+                color: #555;
+                letter-spacing: 0.5px;
+            }
+            tr.path-child td {
+                background: #050505;
+            }
+            tr.path-child td:first-child {
+                padding-left: 28px;
+            }
+            tr.path-group {
+                cursor: pointer;
+            }
+            tr.path-group:hover td {
+                background: #0c0c0c;
+            }
             .empty {
                 color: #444;
                 font-size: 13px;
@@ -489,22 +552,27 @@
             </div>
             <p class="hint">
                 neurons = unique visitors who entered / left here · visits =
-                passage count (one person can bounce many times)
+                passage count · grouped by first path segment (click to expand)
             </p>
 
             <div class="section-label">top pages</div>
             <div class="table-wrap">
                 <table class="cyber-table" id="particles"></table>
             </div>
+            <p class="hint">
+                grouped by first path segment · click a folder to expand
+                children · segment neurons/visits are sums of child paths (may
+                overlap)
+            </p>
 
-            <div class="section-label">geo · devices</div>
-            <div class="split-2">
-                <div class="table-wrap">
-                    <table class="cyber-table" id="countries"></table>
-                </div>
-                <div class="table-wrap">
-                    <table class="cyber-table" id="devices"></table>
-                </div>
+            <div class="section-label">geo</div>
+            <div class="table-wrap">
+                <table class="cyber-table" id="countries"></table>
+            </div>
+
+            <div class="section-label">devices</div>
+            <div class="table-wrap">
+                <table class="cyber-table" id="devices"></table>
             </div>
 
             <div class="section-label">visits by source</div>
@@ -619,6 +687,173 @@
                         )
                         .join("") +
                     `</tbody>`;
+            }
+
+            // path segment rollup: first segment = folder, rest = children.
+            // expanded state survives window chip changes within the session.
+            const pathExpanded = {
+                entries: new Set(),
+                exits: new Set(),
+                particles: new Set(),
+            };
+
+            function pathParts(pathname) {
+                if (!pathname || pathname === "/")
+                    return { group: "/", rest: null };
+                const segs = pathname
+                    .replace(/^\//, "")
+                    .split("/")
+                    .filter(Boolean);
+                if (segs.length === 0) return { group: "/", rest: null };
+                if (segs.length === 1)
+                    return { group: "/" + segs[0], rest: null };
+                return {
+                    group: "/" + segs[0],
+                    rest: segs.slice(1).join("/"),
+                };
+            }
+
+            /** @param rows raw API rows with .pathname
+             *  @param sumKeys numeric keys to sum onto groups
+             */
+            function groupByPathSegment(rows, sumKeys) {
+                const map = new Map();
+                for (const row of rows || []) {
+                    const path = row.pathname || "/";
+                    const { group, rest } = pathParts(path);
+                    let g = map.get(group);
+                    if (!g) {
+                        g = {
+                            group,
+                            metrics: Object.fromEntries(
+                                sumKeys.map((k) => [k, 0]),
+                            ),
+                            children: [],
+                            leaf: null, // single-segment path is the group itself
+                        };
+                        map.set(group, g);
+                    }
+                    for (const k of sumKeys) {
+                        g.metrics[k] =
+                            (g.metrics[k] || 0) + (Number(row[k]) || 0);
+                    }
+                    if (rest == null) {
+                        // exact group path (e.g. /tokens or /)
+                        g.leaf = row;
+                    } else {
+                        g.children.push({
+                            label: rest,
+                            pathname: path,
+                            row,
+                        });
+                    }
+                }
+                // sort groups by first sum key desc (neurons preferred)
+                const primary = sumKeys[0];
+                const groups = [...map.values()].sort(
+                    (a, b) =>
+                        (b.metrics[primary] || 0) - (a.metrics[primary] || 0),
+                );
+                for (const g of groups) {
+                    g.children.sort(
+                        (a, b) =>
+                            (Number(b.row[primary]) || 0) -
+                            (Number(a.row[primary]) || 0),
+                    );
+                }
+                return groups;
+            }
+
+            /**
+             * render expandable path-segment table.
+             * formatCells(row|metrics, isGroup) → array of cell HTML for metric cols
+             * pathCol is always first.
+             */
+            function renderPathTable(
+                el,
+                expandKey,
+                headers,
+                groups,
+                formatCells,
+            ) {
+                if (!groups || !groups.length) {
+                    el.innerHTML = `<tbody><tr><td class="empty" colspan="${headers.length}">— no data in window</td></tr></tbody>`;
+                    return;
+                }
+                const expanded = pathExpanded[expandKey];
+                const head = `<thead><tr>${headers
+                    .map(
+                        (h, i) =>
+                            `<th class="${i === 0 ? "" : "num"}">${h}</th>`,
+                    )
+                    .join("")}</tr></thead>`;
+
+                const pathCell = (
+                    label,
+                    { isGroup, open, nChildren, title },
+                ) => {
+                    const tog = isGroup
+                        ? `<button type="button" class="path-tog" aria-expanded="${open}" data-group="${label}" title="${open ? "collapse" : "expand"}">${open ? "−" : "+"}</button>`
+                        : `<span class="path-tog leaf" aria-hidden="true"></span>`;
+                    const count =
+                        isGroup && nChildren
+                            ? `<span class="path-count">${nChildren}</span>`
+                            : "";
+                    return `<div class="path-cell">${tog}<span class="path-lab ${isGroup ? "group" : "child"}" title="${title || label}">${label}</span>${count}</div>`;
+                };
+
+                let body = "";
+                for (const g of groups) {
+                    const hasKids = g.children.length > 0;
+                    const open = hasKids && expanded.has(g.group);
+                    // group with only a leaf and no kids → plain row
+                    const isFolder = hasKids;
+                    const cells = formatCells(g.metrics, true, g);
+                    body += `<tr class="${isFolder ? "path-group" : ""}" ${isFolder ? `data-group="${g.group}"` : ""}>
+            <td>${pathCell(g.group, {
+                isGroup: isFolder,
+                open,
+                nChildren: g.children.length,
+                title: g.group,
+            })}</td>
+            ${cells.map((c) => `<td class="num">${c}</td>`).join("")}
+          </tr>`;
+                    if (open) {
+                        for (const ch of g.children) {
+                            const chCells = formatCells(ch.row, false, g);
+                            body += `<tr class="path-child">
+              <td>${pathCell(ch.label, {
+                  isGroup: false,
+                  open: false,
+                  nChildren: 0,
+                  title: ch.pathname,
+              })}</td>
+              ${chCells.map((c) => `<td class="num">${c}</td>`).join("")}
+            </tr>`;
+                        }
+                    }
+                }
+                el.innerHTML = head + `<tbody>${body}</tbody>`;
+
+                // toggle handlers
+                el.querySelectorAll("tr.path-group").forEach((tr) => {
+                    const toggle = () => {
+                        const key = tr.dataset.group;
+                        if (expanded.has(key)) expanded.delete(key);
+                        else expanded.add(key);
+                        renderPathTable(
+                            el,
+                            expandKey,
+                            headers,
+                            groups,
+                            formatCells,
+                        );
+                    };
+                    tr.addEventListener("click", (e) => {
+                        if (e.target.closest("a")) return;
+                        toggle();
+                    });
+                });
             }
 
             function cards(items) {
@@ -819,37 +1054,58 @@
                 const series = await get("timeseries", `?bucket=${w.bucket}`);
                 renderPulse(Array.isArray(series) ? series : [], w.bucket);
 
-                // landings / exits — neurons = unique visitors; visits = passages
-                const pass = await get("passages", "?limit=25");
-                const pathCols = [
-                    ["pathname", ""],
-                    ["neurons", "num"],
-                    ["passages", "num"],
+                // landings / exits — grouped by first path segment
+                const pass = await get("passages", "?limit=100");
+                const passFmt = (m) => [
+                    m.neurons ?? "—",
+                    m.passages ?? m.visits ?? "—",
                 ];
-                table(
+                renderPathTable(
                     document.getElementById("entries"),
+                    "entries",
                     ["ENTRY", "NEURONS", "VISITS"],
-                    (pass.entries || []).map((r) => ({
-                        pathname: shortPath(r.pathname),
-                        neurons: r.neurons ?? "—",
-                        passages: r.passages,
-                    })),
-                    pathCols,
+                    groupByPathSegment(pass.entries || [], [
+                        "neurons",
+                        "passages",
+                    ]),
+                    (m) => passFmt(m),
                 );
-                table(
+                renderPathTable(
                     document.getElementById("exits"),
+                    "exits",
                     ["EXIT", "NEURONS", "VISITS"],
-                    (pass.exits || []).map((r) => ({
-                        pathname: shortPath(r.pathname),
-                        neurons: r.neurons ?? "—",
-                        passages: r.passages,
-                    })),
-                    pathCols,
+                    groupByPathSegment(pass.exits || [], [
+                        "neurons",
+                        "passages",
+                    ]),
+                    (m) => passFmt(m),
                 );
 
-                // top pages — funnel + attention
-                table(
+                // top pages — funnel + attention, first-segment rollup
+                const particles = await get("particles", "?limit=100");
+                const particleFmt = (m) => {
+                    const neurons = Number(m.neurons) || 0;
+                    const visits = Number(m.visits) || 0;
+                    const views = Number(m.views) || 0;
+                    const att = Number(m.attention_ms) || 0;
+                    // re-derive from summed totals on groups; leaves use same path
+                    const depthMilli =
+                        visits > 0 ? Math.round((views / visits) * 1000) : 0;
+                    const dwell = visits > 0 ? att / visits : 0;
+                    const attN = neurons > 0 ? att / neurons : 0;
+                    return [
+                        neurons || "—",
+                        visits || "—",
+                        views || "—",
+                        fmtDepth(depthMilli),
+                        fmt(dwell),
+                        fmt(attN),
+                        fmt(att),
+                    ];
+                };
+                renderPathTable(
                     document.getElementById("particles"),
+                    "particles",
                     [
                         "PATH",
                         "NEURONS",
@@ -860,26 +1116,13 @@
                         "ATT/N",
                         "ATTENTION",
                     ],
-                    (await get("particles", "?limit=40")).map((p) => ({
-                        pathname: shortPath(p.pathname),
-                        neurons: p.neurons ?? "—",
-                        visits: p.visits ?? "—",
-                        views: p.views,
-                        depth: fmtDepth(p.views_per_visit_milli),
-                        dwell: fmt(p.attention_ms_per_visit),
-                        att_n: fmt(p.attention_ms_per_neuron),
-                        attention_ms: fmt(p.attention_ms),
-                    })),
-                    [
-                        ["pathname", ""],
-                        ["neurons", "num"],
-                        ["visits", "num"],
-                        ["views", "num"],
-                        ["depth", "num"],
-                        ["dwell", "num"],
-                        ["att_n", "num"],
-                        ["attention_ms", "num"],
-                    ],
+                    groupByPathSegment(particles, [
+                        "neurons",
+                        "visits",
+                        "views",
+                        "attention_ms",
+                    ]),
+                    (m) => particleFmt(m),
                 );
 
                 // geo + devices — funnel: neurons / visits / views
