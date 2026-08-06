@@ -709,10 +709,10 @@
                     pathCols,
                 );
 
-                // top pages with avg dwell
+                // top pages — funnel + attention
                 table(
                     document.getElementById("particles"),
-                    ["PATH", "VIEWS", "ATTENTION", "AVG"],
+                    ["PATH", "NEURONS", "VISITS", "VIEWS", "ATTENTION", "AVG"],
                     (await get("particles", "?limit=40")).map((p) => {
                         const avg =
                             p.views > 0
@@ -720,6 +720,8 @@
                                 : "—";
                         return {
                             pathname: shortPath(p.pathname),
+                            neurons: p.neurons ?? "—",
+                            visits: p.visits ?? "—",
                             views: p.views,
                             attention_ms: fmt(p.attention_ms),
                             avg,
@@ -727,51 +729,55 @@
                     }),
                     [
                         ["pathname", ""],
+                        ["neurons", "num"],
+                        ["visits", "num"],
                         ["views", "num"],
                         ["attention_ms", "num"],
                         ["avg", "num"],
                     ],
                 );
 
-                // geo + devices (API: countries={country,events,neurons};
-                // devices={classes,browsers,os})
+                // geo + devices — funnel: neurons / visits / views
+                const funnelCols = [
+                    ["name", ""],
+                    ["neurons", "num"],
+                    ["visits", "num"],
+                    ["views", "num"],
+                ];
                 table(
                     document.getElementById("countries"),
-                    ["COUNTRY", "NEURONS", "EVENTS"],
+                    ["COUNTRY", "NEURONS", "VISITS", "VIEWS"],
                     (await get("countries", "?limit=20")).map((r) => ({
-                        country: r.country ?? "—",
+                        name: r.country ?? "—",
                         neurons: r.neurons ?? "",
-                        events: r.events ?? "",
+                        visits: r.visits ?? "",
+                        views: r.views ?? "",
                     })),
-                    [
-                        ["country", ""],
-                        ["neurons", "num"],
-                        ["events", "num"],
-                    ],
+                    funnelCols,
                 );
                 const dev = await get("devices", "?limit=20");
                 const classRows = (dev.classes || []).map((r) => ({
-                    device: r.class ?? "—",
-                    events: r.events ?? "",
+                    name: r.class ?? "—",
+                    neurons: r.neurons ?? "",
+                    visits: r.visits ?? "",
+                    views: r.views ?? "",
                 }));
-                const browserRows = (dev.browsers || [])
-                    .slice(0, 8)
-                    .map((r) => ({
-                        device: r.browser ?? "—",
-                        events: r.events ?? "",
-                    }));
+                const browserRows = (dev.browsers || []).slice(0, 8).map((r) => ({
+                    name: r.browser ?? "—",
+                    neurons: r.neurons ?? "",
+                    visits: r.visits ?? "",
+                    views: r.views ?? "",
+                }));
                 table(
                     document.getElementById("devices"),
-                    ["CLASS / BROWSER", "EVENTS"],
+                    ["CLASS / BROWSER", "NEURONS", "VISITS", "VIEWS"],
                     [...classRows, ...browserRows],
-                    [
-                        ["device", ""],
-                        ["events", "num"],
-                    ],
+                    funnelCols,
                 );
 
                 const mapVisitRow = (r) => ({
                     name: r.source ?? r.channel ?? r.key,
+                    neurons: r.neurons ?? "—",
                     visits: r.visits,
                     views: r.views,
                     depth: fmtDepth(r.views_per_visit_milli),
@@ -781,6 +787,7 @@
 
                 const visitCols = [
                     ["name", ""],
+                    ["neurons", "num"],
                     ["visits", "num"],
                     ["views", "num"],
                     ["depth", "num"],
@@ -792,6 +799,7 @@
                     document.getElementById("sources"),
                     [
                         "SOURCE",
+                        "NEURONS",
                         "VISITS",
                         "VIEWS",
                         "DEPTH",
@@ -805,6 +813,7 @@
                     document.getElementById("channels"),
                     [
                         "CHANNEL",
+                        "NEURONS",
                         "VISITS",
                         "VIEWS",
                         "DEPTH",
@@ -814,6 +823,8 @@
                     (await get("channels")).map(mapVisitRow),
                     visitCols,
                 );
+
+            
             }
 
             refresh();

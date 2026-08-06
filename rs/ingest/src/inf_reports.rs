@@ -576,33 +576,48 @@ fn visit_breakdown(src: &LocalSource, rel: &str, col: &str, limit: usize) -> ser
     .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
     .unwrap_or_default();
 
+    // distinct neurons under this source/channel
+    let neurons: BTreeMap<String, u64> = q(
+        src,
+        &format!(
+            "{RULE_KT}{key_rule}dn[{col}, neuron] := {rel}[neuron, passage_id, {col}]\n?[{col}, count(neuron)] := dn[{col}, neuron]"
+        ),
+    )
+    .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+    .unwrap_or_default();
+
     let mut rows: Vec<_> = visits
         .iter()
         .map(|(k, v)| {
             let views = views.get(k).copied().unwrap_or(0);
             let att = attn.get(k).copied().unwrap_or(0);
+            let neurons = neurons.get(k).copied().unwrap_or(0);
             let vpv_milli = views
                 .checked_mul(1000)
                 .and_then(|x| x.checked_div(*v))
                 .unwrap_or(0);
             let att_pv = att.checked_div(*v).unwrap_or(0);
-            (k.clone(), *v, views, att, vpv_milli, att_pv)
+            (k.clone(), neurons, *v, views, att, vpv_milli, att_pv)
         })
         .collect();
-    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    // juice: unique neurons first, then visits
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(&b.0)));
     rows.truncate(limit);
     json!(
         rows.into_iter()
-            .map(|(k, visits, views, att, vpv_milli, att_pv)| json!({
-                "key": k,
-                "source": k,
-                "channel": k,
-                "visits": visits,
-                "views": views,
-                "attention_ms": att,
-                "views_per_visit_milli": vpv_milli,
-                "attention_ms_per_visit": att_pv,
-            }))
+            .map(
+                |(k, neurons, visits, views, att, vpv_milli, att_pv)| json!({
+                    "key": k,
+                    "source": k,
+                    "channel": k,
+                    "neurons": neurons,
+                    "visits": visits,
+                    "views": views,
+                    "attention_ms": att,
+                    "views_per_visit_milli": vpv_milli,
+                    "attention_ms_per_visit": att_pv,
+                })
+            )
             .collect::<Vec<_>>()
     )
 }
@@ -761,9 +776,7 @@ pub fn timeseries(events: &[&Stored], bucket_ms: u64) -> serde_json::Value {
     json!(rows)
 }
 
-/// top particles by views — each pathname is a particle (`graph::page_particle`
-/// hashes hostname+pathname); `pathname` here is the particle's human-readable
-/// name, not its hash.
+/// top particles — funnel: neurons / visits (arrivals on path) / views + attention.
 pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
     let src = events_source(events);
     let mut attention: BTreeMap<String, u64> = BTreeMap::new();
@@ -775,9 +788,9 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
             attention.insert(as_str(&r[0]), as_u64(&r[1]));
         }
     }
-    let mut rows: Vec<(String, u64)> = q(
+    let views: BTreeMap<String, u64> = q(
         &src,
-        r#"?[pathname, count(neuron)] := events{kind: "pageview", pathname, neuron}"#,
+        r#"?[pathname, count(ts)] := events{kind: "pageview", pathname, ts}"#,
     )
     .map(|out| {
         out.rows
@@ -786,16 +799,56 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
             .collect()
     })
     .unwrap_or_default();
-    // inf's :sort took the aggregated column's inherited name in testing, but
-    // ties need a stable secondary key to match the Rust reference exactly —
-    // sort here rather than lean on the query's :sort/:limit for that reason.
-    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let neurons: BTreeMap<String, u64> = q(
+        &src,
+        r#"dn[pathname, neuron] := events{kind: "pageview", pathname, neuron}
+?[pathname, count(neuron)] := dn[pathname, neuron]"#,
+    )
+    .map(|out| {
+        out.rows
+            .iter()
+            .map(|r| (as_str(&r[0]), as_u64(&r[1])))
+            .collect()
+    })
+    .unwrap_or_default();
+    let visits: BTreeMap<String, u64> = q(
+        &src,
+        r#"?[pathname, count(ts)] := events{kind: "pageview", pathname, ts, arrival: "1"}"#,
+    )
+    .map(|out| {
+        out.rows
+            .iter()
+            .map(|r| (as_str(&r[0]), as_u64(&r[1])))
+            .collect()
+    })
+    .unwrap_or_default();
+
+    let mut rows: Vec<_> = views
+        .into_iter()
+        .map(|(path, pv)| {
+            let n = neurons.get(&path).copied().unwrap_or(0);
+            let v = visits.get(&path).copied().unwrap_or(0);
+            (path, n, v, pv)
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then(b.2.cmp(&a.2))
+            .then(b.3.cmp(&a.3))
+            .then(a.0.cmp(&b.0))
+    });
     rows.truncate(limit);
     let out: Vec<_> = rows
         .into_iter()
-        .map(|(path, pv)| {
+        .map(|(path, neurons, visits, pv)| {
             let att = attention.get(&path).copied().unwrap_or(0);
-            json!({"pathname": path, "views": pv, "attention_ms": att})
+            json!({
+                "pathname": path,
+                "neurons": neurons,
+                "visits": visits,
+                "views": pv,
+                "attention_ms": att,
+            })
         })
         .collect();
     json!(out)
@@ -855,57 +908,81 @@ pub fn actors(events: &[&Stored]) -> serde_json::Value {
     })
 }
 
-pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
-    let src = events_source(events);
-    let counts: Vec<(String, u64)> =
-        q(&src, "?[country, count(neuron)] := geo_ev{country, neuron}")
-            .map(|out| {
-                out.rows
-                    .iter()
-                    .map(|r| (as_str(&r[0]), as_u64(&r[1])))
-                    .collect()
-            })
-            .unwrap_or_default();
-    let distinct: BTreeMap<String, u64> =
-        q(&src, "dn[country, neuron] := geo_ev{country, neuron}\n?[country, count(neuron)] := dn[country, neuron]")
-            .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
-            .unwrap_or_default();
-    let mut rows = counts;
-    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    rows.truncate(limit);
-    json!(
-        rows.into_iter()
-            .map(|(c, n)| {
-                let neurons = distinct.get(&c).copied().unwrap_or(0);
-                json!({"country": c, "events": n, "neurons": neurons})
-            })
-            .collect::<Vec<_>>()
+/// Funnel for a per-event dimension relation `{neuron, <col>, ts}`:
+/// neurons (unique), visits (arrivals), views (pageviews).
+/// Prefer this shape over raw event counts in every cut.
+fn dim_funnel(src: &LocalSource, rel: &str, col: &str, limit: usize) -> Vec<serde_json::Value> {
+    // distinct neurons that ever had an event with this dim value
+    let neurons: BTreeMap<String, u64> = q(
+        src,
+        &format!(
+            "dn[{col}, neuron] := {rel}{{{col}, neuron, ts}}\n?[{col}, count(neuron)] := dn[{col}, neuron]"
+        ),
     )
-}
+    .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+    .unwrap_or_default();
 
-fn top_field(src: &LocalSource, rel: &str, col: &str, limit: usize) -> Vec<serde_json::Value> {
-    let script = format!("?[{col}, count(neuron)] := {rel}{{{col}, neuron}}");
-    let mut rows: Vec<(String, u64)> = q(src, &script)
-        .map(|out| {
-            out.rows
-                .iter()
-                .map(|r| (as_str(&r[0]), as_u64(&r[1])))
-                .collect()
+    // pageviews tagged with this dim (join on neuron+ts)
+    let views: BTreeMap<String, u64> = q(
+        src,
+        &format!(
+            r#"?[{col}, count(ts)] := {rel}{{{col}, neuron, ts}}, events{{neuron, ts, kind: "pageview"}}"#
+        ),
+    )
+    .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+    .unwrap_or_default();
+
+    // arrivals (= visits that opened with this dim on the arrival event)
+    let visits: BTreeMap<String, u64> = q(
+        src,
+        &format!(
+            r#"?[{col}, count(ts)] := {rel}{{{col}, neuron, ts}}, events{{neuron, ts, kind: "pageview", arrival: "1"}}"#
+        ),
+    )
+    .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+    .unwrap_or_default();
+
+    let mut rows: Vec<_> = neurons
+        .into_iter()
+        .map(|(k, n)| {
+            let visits = visits.get(&k).copied().unwrap_or(0);
+            let views = views.get(&k).copied().unwrap_or(0);
+            (k, n, visits, views)
         })
-        .unwrap_or_default();
-    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        .collect();
+    // juice order: unique people, then visits, then views
+    rows.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then(b.2.cmp(&a.2))
+            .then(b.3.cmp(&a.3))
+            .then(a.0.cmp(&b.0))
+    });
     rows.truncate(limit);
     rows.into_iter()
-        .map(|(k, n)| json!({col: k, "events": n}))
+        .map(|(k, neurons, visits, views)| {
+            json!({
+                col: k,
+                "neurons": neurons,
+                "visits": visits,
+                "views": views,
+            })
+        })
         .collect()
+}
+
+pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
+    let src = events_source(events);
+    // rows use "country" key via dim_funnel col name
+    let rows = dim_funnel(&src, "geo_ev", "country", limit);
+    json!(rows)
 }
 
 pub fn devices(events: &[&Stored], limit: usize) -> serde_json::Value {
     let src = events_source(events);
     json!({
-        "browsers": top_field(&src, "browser_ev", "browser", limit),
-        "os": top_field(&src, "os_ev", "os", limit),
-        "classes": top_field(&src, "class_ev", "class", limit),
+        "browsers": dim_funnel(&src, "browser_ev", "browser", limit),
+        "os": dim_funnel(&src, "os_ev", "os", limit),
+        "classes": dim_funnel(&src, "class_ev", "class", limit),
     })
 }
 
@@ -1304,8 +1381,9 @@ mod tests {
         assert_eq!(inf, reference);
         let arr = inf.as_array().unwrap();
         let us = arr.iter().find(|r| r["country"] == "US").unwrap();
-        assert_eq!(us["events"], 3);
         assert_eq!(us["neurons"], 2);
+        assert_eq!(us["views"], 3); // 3 pageviews in US
+        assert_eq!(us["visits"], 3); // all three are arrivals
     }
 
     #[test]

@@ -212,25 +212,52 @@ fn top_counts<'a, F: Fn(&&'a Stored) -> Option<String>>(
     rows
 }
 
-/// top particles by views — each pathname is a particle (`graph::page_particle`
-/// hashes hostname+pathname); `pathname` here is the particle's human-readable
-/// name, not its hash.
+/// top particles — funnel: neurons / visits / views + attention.
 #[cfg(test)]
 pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
     let mut attention: BTreeMap<String, u64> = BTreeMap::new();
+    let mut views: BTreeMap<String, u64> = BTreeMap::new();
+    let mut visits: BTreeMap<String, u64> = BTreeMap::new();
+    let mut neurons: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
     for e in events {
         *attention.entry(e.body.pathname.clone()).or_default() += e.attention_ms();
+        if e.is_pageview() {
+            *views.entry(e.body.pathname.clone()).or_default() += 1;
+            neurons
+                .entry(e.body.pathname.clone())
+                .or_default()
+                .insert(e.body.neuron.as_str());
+        }
+        if e.is_arrival() {
+            *visits.entry(e.body.pathname.clone()).or_default() += 1;
+        }
     }
-    let rows = top_counts(
-        events,
-        |e| e.is_pageview().then(|| e.body.pathname.clone()),
-        limit,
-    );
-    let out: Vec<_> = rows
+    let mut rows: Vec<_> = views
         .into_iter()
         .map(|(path, pv)| {
+            let n = neurons.get(&path).map(|s| s.len() as u64).unwrap_or(0);
+            let v = visits.get(&path).copied().unwrap_or(0);
+            (path, n, v, pv)
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then(b.2.cmp(&a.2))
+            .then(b.3.cmp(&a.3))
+            .then(a.0.cmp(&b.0))
+    });
+    rows.truncate(limit);
+    let out: Vec<_> = rows
+        .into_iter()
+        .map(|(path, neurons, visits, pv)| {
             let att = attention.get(&path).copied().unwrap_or(0);
-            json!({"pathname": path, "views": pv, "attention_ms": att})
+            json!({
+                "pathname": path,
+                "neurons": neurons,
+                "visits": visits,
+                "views": pv,
+                "attention_ms": att,
+            })
         })
         .collect();
     json!(out)
@@ -262,33 +289,40 @@ fn visit_breakdown<F: Fn(&Stored) -> String>(
     limit: usize,
     key_of: F,
 ) -> serde_json::Value {
-    // source key → (visits, views, attention_ms)
-    let mut map: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
+    // source key → (visits, views, attention_ms, neurons)
+    let mut map: BTreeMap<String, (u64, u64, u64, BTreeSet<&str>)> = BTreeMap::new();
     for pass in passages(events) {
-        let key = pass
+        let first = pass
             .events
             .iter()
             .find(|e| e.is_arrival())
-            .or_else(|| pass.events.first())
-            .map(|e| key_of(e))
-            .unwrap_or_else(|| "unknown".into());
+            .or_else(|| pass.events.first());
+        let key = first.map(|e| key_of(e)).unwrap_or_else(|| "unknown".into());
+        let neuron = first.map(|e| e.body.neuron.as_str()).unwrap_or("");
         let slot = map.entry(key).or_default();
         slot.0 += 1;
         slot.1 += pass.views() as u64;
         slot.2 += pass.events.iter().map(|e| e.attention_ms()).sum::<u64>();
+        if !neuron.is_empty() {
+            slot.3.insert(neuron);
+        }
     }
-    let mut rows: Vec<_> = map.into_iter().collect();
-    rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+    let mut rows: Vec<_> = map
+        .into_iter()
+        .map(|(k, (visits, views, att, neurons))| (k, neurons.len() as u64, visits, views, att))
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(&b.0)));
     rows.truncate(limit);
     json!(
         rows.into_iter()
-            .map(|(k, (visits, views, att))| {
+            .map(|(k, neurons, visits, views, att)| {
                 let vpv_milli = (views * 1000).checked_div(visits).unwrap_or(0);
                 let att_pv = att.checked_div(visits).unwrap_or(0);
                 json!({
                     "key": k,
                     "source": k,
                     "channel": k,
+                    "neurons": neurons,
                     "visits": visits,
                     "views": views,
                     "attention_ms": att,
@@ -324,28 +358,67 @@ pub fn actors(events: &[&Stored]) -> serde_json::Value {
 }
 
 #[cfg(test)]
-pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
+fn dim_funnel_ref(
+    events: &[&Stored],
+    key: impl Fn(&Stored) -> Option<String>,
+    limit: usize,
+) -> Vec<serde_json::Value> {
     let mut neurons: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+    let mut views: BTreeMap<String, u64> = BTreeMap::new();
+    let mut visits: BTreeMap<String, u64> = BTreeMap::new();
     for e in events {
-        if let Some(geo) = &e.geo
-            && let Some(c) = &geo.country
-        {
-            neurons
-                .entry(c.clone())
-                .or_default()
-                .insert(e.body.neuron.as_str());
+        let Some(k) = key(e) else { continue };
+        neurons
+            .entry(k.clone())
+            .or_default()
+            .insert(e.body.neuron.as_str());
+        if e.is_pageview() {
+            *views.entry(k.clone()).or_default() += 1;
+        }
+        if e.is_arrival() {
+            *visits.entry(k.clone()).or_default() += 1;
         }
     }
-    let rows = top_counts(
+    let mut rows: Vec<_> = neurons
+        .into_iter()
+        .map(|(k, set)| {
+            let n = set.len() as u64;
+            let visits = visits.get(&k).copied().unwrap_or(0);
+            let views = views.get(&k).copied().unwrap_or(0);
+            (k, n, visits, views)
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then(b.2.cmp(&a.2))
+            .then(b.3.cmp(&a.3))
+            .then(a.0.cmp(&b.0))
+    });
+    rows.truncate(limit);
+    rows.into_iter()
+        .map(|(k, neurons, visits, views)| {
+            json!({"key": k, "neurons": neurons, "visits": visits, "views": views})
+        })
+        .collect()
+}
+
+#[cfg(test)]
+pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
+    let rows = dim_funnel_ref(
         events,
         |e| e.geo.as_ref().and_then(|g| g.country.clone()),
         limit,
     );
     json!(
         rows.into_iter()
-            .map(|(c, n)| {
-                let distinct = neurons.get(&c).map(|s| s.len()).unwrap_or(0);
-                json!({"country": c, "events": n, "neurons": distinct})
+            .map(|mut r| {
+                // rename key → country for the public shape
+                let k = r["key"].as_str().unwrap_or("").to_string();
+                r.as_object_mut().unwrap().remove("key");
+                r.as_object_mut()
+                    .unwrap()
+                    .insert("country".into(), json!(k));
+                r
             })
             .collect::<Vec<_>>()
     )
@@ -353,13 +426,20 @@ pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
 
 #[cfg(test)]
 pub fn devices(events: &[&Stored], limit: usize) -> serde_json::Value {
-    let browsers = top_counts(events, |e| e.device.browser.clone(), limit);
-    let oses = top_counts(events, |e| e.device.os.clone(), limit);
-    let classes = top_counts(events, |e| e.device.device.clone(), limit);
+    let map_key = |field: &str, rows: Vec<serde_json::Value>| {
+        rows.into_iter()
+            .map(|mut r| {
+                let k = r["key"].as_str().unwrap_or("").to_string();
+                r.as_object_mut().unwrap().remove("key");
+                r.as_object_mut().unwrap().insert(field.into(), json!(k));
+                r
+            })
+            .collect::<Vec<_>>()
+    };
     json!({
-        "browsers": browsers.into_iter().map(|(k, n)| json!({"browser": k, "events": n})).collect::<Vec<_>>(),
-        "os": oses.into_iter().map(|(k, n)| json!({"os": k, "events": n})).collect::<Vec<_>>(),
-        "classes": classes.into_iter().map(|(k, n)| json!({"class": k, "events": n})).collect::<Vec<_>>(),
+        "browsers": map_key("browser", dim_funnel_ref(events, |e| e.device.browser.clone(), limit)),
+        "os": map_key("os", dim_funnel_ref(events, |e| e.device.os.clone(), limit)),
+        "classes": map_key("class", dim_funnel_ref(events, |e| e.device.device.clone(), limit)),
     })
 }
 
