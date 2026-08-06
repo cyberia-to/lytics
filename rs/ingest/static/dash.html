@@ -509,14 +509,17 @@
             </div>
 
             <div class="window-chips" id="chips"></div>
+            <div class="window-chips" id="aud-chips"></div>
             <div class="meta-line" id="meta">loading window…</div>
 
             <div class="section-label">overview</div>
             <div class="stat-grid" id="ov"></div>
+            <div class="stat-grid" id="ov-aud" style="margin-top: 12px"></div>
             <p class="hint">
                 core: neurons → visits → views · derivatives: depth =
                 views/visit · dwell = attention/visit · att/neuron = total
-                looking per unique key
+                looking per unique key · NEW = first-seen in window · RETURNING
+                = seen before window
             </p>
 
             <div class="section-label">retention</div>
@@ -619,18 +622,31 @@
                     bucket: "day",
                 },
             ];
+            const AUDIENCES = [
+                { id: "all", label: "ALL" },
+                { id: "new", label: "NEW" },
+                { id: "returning", label: "RETURNING" },
+            ];
             let windowId =
                 new URLSearchParams(location.search).get("w") || "7d";
             if (!WINDOWS.some((w) => w.id === windowId)) windowId = "7d";
+            let audienceId =
+                new URLSearchParams(location.search).get("a") || "all";
+            if (!AUDIENCES.some((a) => a.id === audienceId)) audienceId = "all";
 
             function windowSpec() {
                 return WINDOWS.find((w) => w.id === windowId) || WINDOWS[1];
+            }
+            function audienceSpec() {
+                return (
+                    AUDIENCES.find((a) => a.id === audienceId) || AUDIENCES[0]
+                );
             }
             function qs() {
                 const w = windowSpec();
                 const to = Date.now() + 1;
                 const from = Date.now() - w.ms;
-                return `?from=${from}&to=${to}&limit=50`;
+                return `?from=${from}&to=${to}&limit=50&audience=${audienceId}`;
             }
             const get = (name, extra = "") => {
                 const base = qs();
@@ -641,6 +657,13 @@
                     (r) => r.json(),
                 );
             };
+
+            function setQueryState() {
+                const u = new URL(location.href);
+                u.searchParams.set("w", windowId);
+                u.searchParams.set("a", audienceId);
+                history.replaceState(null, "", u);
+            }
 
             const fmt = (ms) => {
                 if (ms == null || ms === 0) return "0s";
@@ -883,12 +906,78 @@
                 document.querySelectorAll("#chips .chip").forEach((btn) => {
                     btn.onclick = () => {
                         windowId = btn.dataset.w;
-                        const u = new URL(location.href);
-                        u.searchParams.set("w", windowId);
-                        history.replaceState(null, "", u);
+                        setQueryState();
                         refresh();
                     };
                 });
+                document.getElementById("aud-chips").innerHTML = AUDIENCES.map(
+                    (a) =>
+                        `<button type="button" class="chip ${a.id === audienceId ? "on" : ""}" data-a="${a.id}">${a.label}</button>`,
+                ).join("");
+                document.querySelectorAll("#aud-chips .chip").forEach((btn) => {
+                    btn.onclick = () => {
+                        audienceId = btn.dataset.a;
+                        setQueryState();
+                        refresh();
+                    };
+                });
+            }
+
+            function renderAudienceSplit(o) {
+                const el = document.getElementById("ov-aud");
+                // only when looking at ALL — filtered views already are the slice
+                if (
+                    audienceId !== "all" ||
+                    !o.new ||
+                    !o.returning ||
+                    typeof o.new !== "object"
+                ) {
+                    el.innerHTML = "";
+                    return;
+                }
+                const n = o.new;
+                const r = o.returning;
+                const totalN = o.neurons || 0 || 1;
+                const pct = (x) =>
+                    `${Math.round(((Number(x) || 0) / totalN) * 100)}%`;
+                el.innerHTML = cards([
+                    [
+                        "NEW NEURONS",
+                        n.neurons ?? 0,
+                        `${pct(n.neurons)} of window · first-seen here`,
+                        "yellow",
+                    ],
+                    [
+                        "NEW VISITS",
+                        n.visits ?? 0,
+                        `depth ${fmtDepth(n.views_per_visit_milli)} · dwell ${fmt(n.attention_ms_per_visit)}`,
+                        "yellow",
+                    ],
+                    [
+                        "NEW ATT",
+                        fmt(n.attention_ms),
+                        `att/neuron ${fmt(n.attention_ms_per_neuron)}`,
+                        "yellow",
+                    ],
+                    [
+                        "RET NEURONS",
+                        r.neurons ?? 0,
+                        `${pct(r.neurons)} of window · seen before`,
+                        "cyan",
+                    ],
+                    [
+                        "RET VISITS",
+                        r.visits ?? 0,
+                        `depth ${fmtDepth(r.views_per_visit_milli)} · dwell ${fmt(r.attention_ms_per_visit)}`,
+                        "cyan",
+                    ],
+                    [
+                        "RET ATT",
+                        fmt(r.attention_ms),
+                        `att/neuron ${fmt(r.attention_ms_per_neuron)}`,
+                        "cyan",
+                    ],
+                ]);
             }
 
             const WEEK_MS = 7 * 24 * 3600 * 1000;
@@ -1027,6 +1116,7 @@
             async function refresh() {
                 renderChips();
                 const w = windowSpec();
+                const aud = audienceSpec();
                 const o = await get("overview");
                 const from = o.from ?? Date.now() - w.ms;
                 const to = o.to ?? Date.now();
@@ -1035,19 +1125,27 @@
                 document.getElementById("meta").innerHTML =
                     `WINDOW <time datetime="${new Date(from).toISOString()}">${fmtDay(from)}</time>` +
                     ` → <time datetime="${new Date(to).toISOString()}">${fmtDay(to)}</time>` +
+                    ` · ${aud.label}` +
                     ` · UTC · AS OF <time datetime="${new Date(asOf).toISOString()}">${fmtStamp(asOf)}</time>`;
 
                 document.getElementById("logo-suffix").textContent =
-                    `cyberstates · ${w.label} · ${fmtDay(from)} → ${fmtDay(to)}`;
+                    `cyberstates · ${w.label} · ${aud.label} · ${fmtDay(from)} → ${fmtDay(to)}`;
 
                 // core funnel: neurons → visits → views
                 // derivatives: depth, dwell, attention, attention/neuron
+                // when audience chip is NEW/RETURNING this is already the slice
                 const depth = fmtDepth(o.views_per_visit_milli);
                 const dwell = fmt(o.attention_ms_per_visit);
                 const attN = fmt(o.attention_ms_per_neuron);
+                const who =
+                    audienceId === "all"
+                        ? "unique keys"
+                        : audienceId === "new"
+                          ? "first-seen in window"
+                          : "seen before window";
 
                 document.getElementById("ov").innerHTML = cards([
-                    ["NEURONS", o.neurons, "unique keys", ""],
+                    ["NEURONS", o.neurons, who, ""],
                     ["VISITS", o.visits, "entries · no timeout", "yellow"],
                     ["VIEWS", o.views, "pages seen", "cyan"],
                     ["DEPTH", depth, "views / visit", "orange"],
@@ -1055,6 +1153,7 @@
                     ["ATTENTION", fmt(o.attention_ms), "total looking", "cyan"],
                     ["ATT / NEURON", attN, "looking per unique key", "magenta"],
                 ]);
+                renderAudienceSplit(o);
 
                 // retention — full history matrix + returns in current window
                 await renderRetention(w);

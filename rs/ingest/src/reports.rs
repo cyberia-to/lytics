@@ -23,8 +23,9 @@ use lytics_event::{EventBody, Kind, Navigation};
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use serde_json::json;
+use std::collections::BTreeMap;
 #[cfg(test)]
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// a stored, enriched event — payload-log plaintext.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +64,48 @@ pub fn in_window(events: &[Stored], from: u64, to: u64) -> Vec<&Stored> {
         .iter()
         .filter(|e| e.body.timestamp >= from && e.body.timestamp < to)
         .collect()
+}
+
+/// earliest event timestamp per neuron across the full log.
+pub fn first_seen(events: &[Stored]) -> BTreeMap<String, u64> {
+    let mut m = BTreeMap::new();
+    for e in events {
+        let ts = e.body.timestamp;
+        m.entry(e.body.neuron.clone())
+            .and_modify(|t| {
+                if ts < *t {
+                    *t = ts;
+                }
+            })
+            .or_insert(ts);
+    }
+    m
+}
+
+/// Restrict windowed events by audience relative to window start `from`.
+///
+/// - `new` — first-seen ≥ `from` (neuron appeared inside the window)
+/// - `returning` — first-seen < `from` (known before the window, active in it)
+/// - `all` / anything else — no filter
+pub fn filter_audience<'a>(
+    windowed: &[&'a Stored],
+    first_seen: &BTreeMap<String, u64>,
+    from: u64,
+    audience: &str,
+) -> Vec<&'a Stored> {
+    match audience {
+        "new" => windowed
+            .iter()
+            .copied()
+            .filter(|e| first_seen.get(&e.body.neuron).is_some_and(|&fs| fs >= from))
+            .collect(),
+        "returning" => windowed
+            .iter()
+            .copied()
+            .filter(|e| first_seen.get(&e.body.neuron).is_some_and(|&fs| fs < from))
+            .collect(),
+        _ => windowed.to_vec(),
+    }
 }
 
 /// events grouped per neuron, ordered by timestamp.
@@ -714,6 +757,34 @@ mod tests {
             content: None,
         });
         assert!(e.is_arrival());
+    }
+
+    #[test]
+    fn audience_splits_new_vs_returning_by_first_seen() {
+        // n1 first-seen before window, active in window → returning
+        // n2 first-seen inside window → new
+        let events = [
+            ev("n1", "/a", 100, Some(Navigation::External), 0),
+            ev("n1", "/b", 1100, Some(Navigation::Internal), 0),
+            ev("n2", "/a", 1200, Some(Navigation::External), 0),
+        ];
+        let from = 1000u64;
+        let to = 2000u64;
+        let windowed = in_window(&events, from, to);
+        let fs = first_seen(&events);
+        assert_eq!(fs.get("n1"), Some(&100));
+        assert_eq!(fs.get("n2"), Some(&1200));
+
+        let neu = filter_audience(&windowed, &fs, from, "new");
+        let ret = filter_audience(&windowed, &fs, from, "returning");
+        assert_eq!(neu.len(), 1);
+        assert_eq!(neu[0].body.neuron, "n2");
+        assert_eq!(ret.len(), 1);
+        assert_eq!(ret[0].body.neuron, "n1");
+        assert_eq!(
+            filter_audience(&windowed, &fs, from, "all").len(),
+            windowed.len()
+        );
     }
 
     #[test]

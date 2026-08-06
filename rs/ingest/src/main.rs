@@ -345,12 +345,40 @@ async fn get_report(
         .filter(|(ver, _)| *ver == app.data_version)
         .map(|(_, v)| v.clone());
 
+    // audience cut: new = first-seen inside [from,to); returning = first-seen
+    // before `from` but active in the window. retention/returns ignore it —
+    // they need the full history for cohort math.
+    let audience = match q.get("audience").map(String::as_str) {
+        Some("new") => "new",
+        Some("returning") => "returning",
+        _ => "all",
+    };
+
     let mut out = if let Some(v) = cached {
         v
     } else {
-        let windowed = reports::in_window(&app.events, from, to);
+        let windowed_all = reports::in_window(&app.events, from, to);
+        let first_seen = reports::first_seen(&app.events);
+        let windowed = reports::filter_audience(&windowed_all, &first_seen, from, audience);
         let computed = match name.as_str() {
-            "overview" => inf_reports::overview(&windowed),
+            "overview" => {
+                let mut o = inf_reports::overview(&windowed);
+                // when unfiltered, attach both slices so the dash can show
+                // the new|returning split without a second round-trip.
+                if audience == "all"
+                    && let Some(obj) = o.as_object_mut()
+                {
+                    let new_ev = reports::filter_audience(&windowed_all, &first_seen, from, "new");
+                    let ret_ev =
+                        reports::filter_audience(&windowed_all, &first_seen, from, "returning");
+                    obj.insert("new".into(), inf_reports::overview(&new_ev));
+                    obj.insert("returning".into(), inf_reports::overview(&ret_ev));
+                }
+                if let Some(obj) = o.as_object_mut() {
+                    obj.insert("audience".into(), json!(audience));
+                }
+                o
+            }
             "timeseries" => {
                 let bucket = match q.get("bucket").map(String::as_str) {
                     Some("hour") => 3600 * 1000,
