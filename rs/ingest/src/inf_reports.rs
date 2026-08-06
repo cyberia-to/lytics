@@ -741,11 +741,17 @@ pub fn overview(events: &[&Stored]) -> serde_json::Value {
 }
 
 /// bucket ms: e.g. 3_600_000 (hour) or 86_400_000 (day).
+///
+/// each row carries the overview-shaped cut for that bucket so the pulse
+/// chart can dual-plot any pair without another round-trip:
+/// neurons / visits (arrivals) / views / attention_ms + depth / dwell /
+/// att-per-neuron derived from the totals.
 pub fn timeseries(events: &[&Stored], bucket_ms: u64) -> serde_json::Value {
     let src = events_source(events);
     let bm = bucket_ms as i64;
 
-    let mut by_bucket: BTreeMap<i64, (u64, u64, u64)> = BTreeMap::new(); // neurons, views, attn
+    // neurons, visits, views, attention_ms
+    let mut by_bucket: BTreeMap<i64, (u64, u64, u64, u64)> = BTreeMap::new();
 
     if let Ok(out) = q(
         &src,
@@ -757,10 +763,11 @@ pub fn timeseries(events: &[&Stored], bucket_ms: u64) -> serde_json::Value {
             by_bucket.entry(as_i64(&r[0])).or_default().0 = as_u64(&r[1]);
         }
     }
+    // visits ≈ arrivals that opened in this bucket
     if let Ok(out) = q(
         &src,
         &format!(
-            r#"?[bucket, count(pathname)] := events{{kind: "pageview", pathname, ts}}, bucket = div(ts, {bm})"#
+            r#"?[bucket, count(pathname)] := events{{arrival: "1", pathname, ts}}, bucket = div(ts, {bm})"#
         ),
     ) {
         for r in out.rows {
@@ -770,18 +777,43 @@ pub fn timeseries(events: &[&Stored], bucket_ms: u64) -> serde_json::Value {
     if let Ok(out) = q(
         &src,
         &format!(
-            r#"?[bucket, sum(ms)] := events{{kind: "attention", ms, ts}}, bucket = div(ts, {bm})"#
+            r#"?[bucket, count(pathname)] := events{{kind: "pageview", pathname, ts}}, bucket = div(ts, {bm})"#
         ),
     ) {
         for r in out.rows {
             by_bucket.entry(as_i64(&r[0])).or_default().2 = as_u64(&r[1]);
         }
     }
+    if let Ok(out) = q(
+        &src,
+        &format!(
+            r#"?[bucket, sum(ms)] := events{{kind: "attention", ms, ts}}, bucket = div(ts, {bm})"#
+        ),
+    ) {
+        for r in out.rows {
+            by_bucket.entry(as_i64(&r[0])).or_default().3 = as_u64(&r[1]);
+        }
+    }
 
     let rows: Vec<_> = by_bucket
         .into_iter()
-        .map(|(bucket, (n, pv, att))| {
-            json!({"t": bucket * bm, "neurons": n, "views": pv, "attention_ms": att})
+        .map(|(bucket, (n, visits, pv, att))| {
+            let depth = pv
+                .checked_mul(1000)
+                .and_then(|x| x.checked_div(visits))
+                .unwrap_or(0);
+            let dwell = att.checked_div(visits).unwrap_or(0);
+            let att_n = att.checked_div(n).unwrap_or(0);
+            json!({
+                "t": bucket * bm,
+                "neurons": n,
+                "visits": visits,
+                "views": pv,
+                "attention_ms": att,
+                "views_per_visit_milli": depth,
+                "attention_ms_per_visit": dwell,
+                "attention_ms_per_neuron": att_n,
+            })
         })
         .collect();
     json!(rows)

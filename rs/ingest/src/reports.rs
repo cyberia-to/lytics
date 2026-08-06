@@ -224,21 +224,48 @@ pub fn overview(events: &[&Stored]) -> serde_json::Value {
 /// bucket ms: "hour" or "day".
 #[cfg(test)]
 pub fn timeseries(events: &[&Stored], bucket_ms: u64) -> serde_json::Value {
-    let mut buckets: BTreeMap<u64, (BTreeSet<&str>, u64, u64)> = BTreeMap::new();
+    // per bucket: neurons, visits(=arrivals), views, attention_ms
+    let mut buckets: BTreeMap<u64, (BTreeSet<&str>, u64, u64, u64)> = BTreeMap::new();
     for e in events {
         let b = e.body.timestamp / bucket_ms * bucket_ms;
         let slot = buckets.entry(b).or_default();
         slot.0.insert(e.body.neuron.as_str());
-        if e.is_pageview() {
+        if e.is_arrival() {
             slot.1 += 1;
         }
-        slot.2 += e.attention_ms();
+        if e.is_pageview() {
+            slot.2 += 1;
+        }
+        slot.3 += e.attention_ms();
     }
     let rows: Vec<_> = buckets
         .into_iter()
-        .map(|(t, (n, pv, att))| json!({"t": t, "neurons": n.len(), "views": pv, "attention_ms": att}))
+        .map(|(t, (n, visits, pv, att))| {
+            let neurons = n.len() as u64;
+            let depth = views_per_visit_milli(pv, visits);
+            let dwell = att.checked_div(visits).unwrap_or(0);
+            let att_n = att.checked_div(neurons).unwrap_or(0);
+            json!({
+                "t": t,
+                "neurons": neurons,
+                "visits": visits,
+                "views": pv,
+                "attention_ms": att,
+                "views_per_visit_milli": depth,
+                "attention_ms_per_visit": dwell,
+                "attention_ms_per_neuron": att_n,
+            })
+        })
         .collect();
     json!(rows)
+}
+
+#[cfg(test)]
+fn views_per_visit_milli(views: u64, visits: u64) -> u64 {
+    views
+        .checked_mul(1000)
+        .and_then(|x| x.checked_div(visits))
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
