@@ -205,6 +205,102 @@
                 line-height: 1.5;
             }
 
+            /* window chips */
+            .window-chips {
+                display: flex;
+                gap: 6px;
+                flex-wrap: wrap;
+                margin: 0 0 8px;
+            }
+            .chip {
+                font-family: "Play", sans-serif;
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 1.5px;
+                text-transform: uppercase;
+                padding: 6px 12px;
+                border: 1px solid #222;
+                border-radius: 2px;
+                background: transparent;
+                color: #666;
+                cursor: pointer;
+            }
+            .chip:hover {
+                border-color: var(--cyber-green);
+                color: var(--cyber-green);
+            }
+            .chip.on {
+                background: var(--cyber-green);
+                border-color: var(--cyber-green);
+                color: #000;
+            }
+
+            /* pulse bars */
+            .pulse {
+                display: flex;
+                align-items: flex-end;
+                gap: 3px;
+                height: 88px;
+                padding: 12px 8px 4px;
+                border: 1px solid #111;
+                border-radius: 2px;
+                background: #050505;
+                overflow-x: auto;
+            }
+            .pulse-col {
+                flex: 1 1 0;
+                min-width: 10px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: flex-end;
+                gap: 2px;
+                height: 100%;
+            }
+            .pulse-stack {
+                width: 100%;
+                display: flex;
+                flex-direction: column;
+                justify-content: flex-end;
+                gap: 1px;
+                height: 68px;
+            }
+            .pulse-bar {
+                width: 100%;
+                border-radius: 1px 1px 0 0;
+                min-height: 0;
+            }
+            .pulse-bar.views {
+                background: var(--cyber-cyan);
+                opacity: 0.85;
+            }
+            .pulse-bar.attn {
+                background: var(--cyber-magenta);
+                opacity: 0.55;
+            }
+            .pulse-lab {
+                font-size: 9px;
+                color: #444;
+                letter-spacing: 0.5px;
+                white-space: nowrap;
+            }
+            .pulse-empty {
+                color: #444;
+                font-size: 13px;
+                padding: 24px;
+                letter-spacing: 1px;
+            }
+            .split-2 {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 16px;
+            }
+            @media (max-width: 800px) {
+                .split-2 {
+                    grid-template-columns: 1fr;
+                }
+            }
+
             /* tables — match .cyber-table */
             .table-wrap {
                 overflow-x: auto;
@@ -317,14 +413,61 @@
                 </div>
             </div>
 
+            <div class="window-chips" id="chips"></div>
             <div class="meta-line" id="meta">loading window…</div>
 
             <div class="section-label">overview</div>
             <div class="stat-grid" id="ov"></div>
             <p class="hint">
-                visit = stream from one external entry to the next · depth =
-                views/visit · dwell = attention/visit
+                visit = one external entry → next · depth = views/visit · dwell
+                = attention/visit · 1-page = single-view visits
             </p>
+
+            <div class="section-label">pulse</div>
+            <div class="pulse" id="pulse"></div>
+            <p class="hint">
+                cyan = pageviews · magenta = attention · day buckets (hour in
+                24h window)
+            </p>
+
+            <div class="section-label">landings · exits</div>
+            <div class="split-2">
+                <div>
+                    <div class="stat-label" style="margin-bottom: 8px">
+                        entry pages
+                    </div>
+                    <div class="table-wrap">
+                        <table class="cyber-table" id="entries"></table>
+                    </div>
+                </div>
+                <div>
+                    <div class="stat-label" style="margin-bottom: 8px">
+                        exit pages
+                    </div>
+                    <div class="table-wrap">
+                        <table class="cyber-table" id="exits"></table>
+                    </div>
+                </div>
+            </div>
+            <p class="hint">
+                where visits open and close — the SEO surface that actually
+                catches attention
+            </p>
+
+            <div class="section-label">top pages</div>
+            <div class="table-wrap">
+                <table class="cyber-table" id="particles"></table>
+            </div>
+
+            <div class="section-label">geo · devices</div>
+            <div class="split-2">
+                <div class="table-wrap">
+                    <table class="cyber-table" id="countries"></table>
+                </div>
+                <div class="table-wrap">
+                    <table class="cyber-table" id="devices"></table>
+                </div>
+            </div>
 
             <div class="section-label">visits by source</div>
             <div class="table-wrap">
@@ -336,11 +479,6 @@
                 <table class="cyber-table" id="channels"></table>
             </div>
 
-            <div class="section-label">particles</div>
-            <div class="table-wrap">
-                <table class="cyber-table" id="particles"></table>
-            </div>
-
             <div class="dock-credit">
                 🏴 a <a href="https://cyberia.to">cyberia</a> project ·
                 <a href="https://cyberstates.net">cyberstates.net</a>
@@ -349,10 +487,48 @@
 
         <script>
             const root = location.pathname.replace(/\/?$/, "/");
-            const get = (name, extra = "") =>
-                fetch(`${root}api/report/${name}${extra}`).then((r) =>
-                    r.json(),
+            const WINDOWS = [
+                {
+                    id: "24h",
+                    label: "24h",
+                    ms: 24 * 3600 * 1000,
+                    bucket: "hour",
+                },
+                {
+                    id: "7d",
+                    label: "7d",
+                    ms: 7 * 24 * 3600 * 1000,
+                    bucket: "day",
+                },
+                {
+                    id: "30d",
+                    label: "30d",
+                    ms: 30 * 24 * 3600 * 1000,
+                    bucket: "day",
+                },
+            ];
+            let windowId =
+                new URLSearchParams(location.search).get("w") || "7d";
+            if (!WINDOWS.some((w) => w.id === windowId)) windowId = "7d";
+
+            function windowSpec() {
+                return WINDOWS.find((w) => w.id === windowId) || WINDOWS[1];
+            }
+            function qs() {
+                const w = windowSpec();
+                const to = Date.now() + 1;
+                const from = Date.now() - w.ms;
+                return `?from=${from}&to=${to}&limit=50`;
+            }
+            const get = (name, extra = "") => {
+                const base = qs();
+                const join = extra.startsWith("?")
+                    ? "&" + extra.slice(1)
+                    : extra;
+                return fetch(`${root}api/report/${name}${base}${join}`).then(
+                    (r) => r.json(),
                 );
+            };
 
             const fmt = (ms) => {
                 if (ms == null || ms === 0) return "0s";
@@ -366,11 +542,20 @@
                 const d = new Date(ms);
                 return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
             };
+            const fmtHour = (ms) => {
+                const d = new Date(ms);
+                return `${String(d.getUTCHours()).padStart(2, "0")}h`;
+            };
             const fmtStamp = (ms) =>
                 new Date(ms)
                     .toISOString()
                     .replace("T", " ")
                     .replace(/\.\d{3}Z$/, " UTC");
+            const shortPath = (p) => {
+                if (!p) return "—";
+                if (p.length <= 42) return p;
+                return p.slice(0, 20) + "…" + p.slice(-18);
+            };
 
             function table(el, headers, data, cols) {
                 if (!data || !data.length) {
@@ -411,9 +596,59 @@
                     .join("");
             }
 
+            function renderChips() {
+                document.getElementById("chips").innerHTML = WINDOWS.map(
+                    (w) =>
+                        `<button type="button" class="chip ${w.id === windowId ? "on" : ""}" data-w="${w.id}">${w.label}</button>`,
+                ).join("");
+                document.querySelectorAll("#chips .chip").forEach((btn) => {
+                    btn.onclick = () => {
+                        windowId = btn.dataset.w;
+                        const u = new URL(location.href);
+                        u.searchParams.set("w", windowId);
+                        history.replaceState(null, "", u);
+                        refresh();
+                    };
+                });
+            }
+
+            function renderPulse(rows, bucket) {
+                const el = document.getElementById("pulse");
+                if (!rows || !rows.length) {
+                    el.innerHTML = `<div class="pulse-empty">— no pulse in window</div>`;
+                    return;
+                }
+                const maxV = Math.max(1, ...rows.map((r) => r.views || 0));
+                const maxA = Math.max(
+                    1,
+                    ...rows.map((r) => r.attention_ms || 0),
+                );
+                el.innerHTML = rows
+                    .map((r) => {
+                        const vh = Math.round(((r.views || 0) / maxV) * 100);
+                        const ah = Math.round(
+                            ((r.attention_ms || 0) / maxA) * 100,
+                        );
+                        const lab =
+                            bucket === "hour"
+                                ? fmtHour(r.t)
+                                : fmtDay(r.t).slice(5);
+                        return `<div class="pulse-col" title="${fmtStamp(r.t)} · ${r.views || 0} views · ${fmt(r.attention_ms)} att · ${r.neurons || 0} neurons">
+            <div class="pulse-stack">
+              <div class="pulse-bar views" style="height:${Math.max(vh * 0.68, r.views ? 2 : 0)}%"></div>
+              <div class="pulse-bar attn" style="height:${Math.max(ah * 0.32, r.attention_ms ? 1 : 0)}%"></div>
+            </div>
+            <div class="pulse-lab">${lab}</div>
+          </div>`;
+                    })
+                    .join("");
+            }
+
             async function refresh() {
+                renderChips();
+                const w = windowSpec();
                 const o = await get("overview");
-                const from = o.from ?? Date.now() - 7 * 24 * 3600 * 1000;
+                const from = o.from ?? Date.now() - w.ms;
                 const to = o.to ?? Date.now();
                 const asOf = o.as_of ?? Date.now();
 
@@ -423,7 +658,7 @@
                     ` · UTC · AS OF <time datetime="${new Date(asOf).toISOString()}">${fmtStamp(asOf)}</time>`;
 
                 document.getElementById("logo-suffix").textContent =
-                    `cyberstates · ${fmtDay(from)} → ${fmtDay(to)}`;
+                    `cyberstates · ${w.label} · ${fmtDay(from)} → ${fmtDay(to)}`;
 
                 const depth = fmtDepth(o.views_per_visit_milli);
                 const dwell = fmt(o.attention_ms_per_visit);
@@ -433,7 +668,7 @@
                     visits > 0 ? `${Math.round((spv / visits) * 100)}%` : "—";
 
                 document.getElementById("ov").innerHTML = cards([
-                    ["NEURONS", o.neurons, "distinct keys", ""],
+                    ["NEURONS", o.neurons, "distinct visitors", ""],
                     ["VIEWS", o.views, "pages seen", "cyan"],
                     ["VISITS", o.visits, "entries · no timeout", "yellow"],
                     ["DEPTH", depth, "views / visit", "orange"],
@@ -441,6 +676,96 @@
                     ["1-PAGE", bounce, `${spv} single-page visits`, ""],
                     ["ATTENTION", fmt(o.attention_ms), "total looking", "cyan"],
                 ]);
+
+                // pulse
+                const series = await get("timeseries", `?bucket=${w.bucket}`);
+                renderPulse(Array.isArray(series) ? series : [], w.bucket);
+
+                // landings / exits
+                const pass = await get("passages", "?limit=25");
+                const pathCols = [
+                    ["pathname", ""],
+                    ["passages", "num"],
+                ];
+                table(
+                    document.getElementById("entries"),
+                    ["ENTRY", "VISITS"],
+                    (pass.entries || []).map((r) => ({
+                        pathname: shortPath(r.pathname),
+                        passages: r.passages,
+                    })),
+                    pathCols,
+                );
+                table(
+                    document.getElementById("exits"),
+                    ["EXIT", "VISITS"],
+                    (pass.exits || []).map((r) => ({
+                        pathname: shortPath(r.pathname),
+                        passages: r.passages,
+                    })),
+                    pathCols,
+                );
+
+                // top pages with avg dwell
+                table(
+                    document.getElementById("particles"),
+                    ["PATH", "VIEWS", "ATTENTION", "AVG"],
+                    (await get("particles", "?limit=40")).map((p) => {
+                        const avg =
+                            p.views > 0
+                                ? fmt(Math.round(p.attention_ms / p.views))
+                                : "—";
+                        return {
+                            pathname: shortPath(p.pathname),
+                            views: p.views,
+                            attention_ms: fmt(p.attention_ms),
+                            avg,
+                        };
+                    }),
+                    [
+                        ["pathname", ""],
+                        ["views", "num"],
+                        ["attention_ms", "num"],
+                        ["avg", "num"],
+                    ],
+                );
+
+                // geo + devices (API: countries={country,events,neurons};
+                // devices={classes,browsers,os})
+                table(
+                    document.getElementById("countries"),
+                    ["COUNTRY", "NEURONS", "EVENTS"],
+                    (await get("countries", "?limit=20")).map((r) => ({
+                        country: r.country ?? "—",
+                        neurons: r.neurons ?? "",
+                        events: r.events ?? "",
+                    })),
+                    [
+                        ["country", ""],
+                        ["neurons", "num"],
+                        ["events", "num"],
+                    ],
+                );
+                const dev = await get("devices", "?limit=20");
+                const classRows = (dev.classes || []).map((r) => ({
+                    device: r.class ?? "—",
+                    events: r.events ?? "",
+                }));
+                const browserRows = (dev.browsers || [])
+                    .slice(0, 8)
+                    .map((r) => ({
+                        device: r.browser ?? "—",
+                        events: r.events ?? "",
+                    }));
+                table(
+                    document.getElementById("devices"),
+                    ["CLASS / BROWSER", "EVENTS"],
+                    [...classRows, ...browserRows],
+                    [
+                        ["device", ""],
+                        ["events", "num"],
+                    ],
+                );
 
                 const mapVisitRow = (r) => ({
                     name: r.source ?? r.channel ?? r.key,
@@ -470,7 +795,7 @@
                         "DWELL",
                         "ATTENTION",
                     ],
-                    (await get("sources", "?limit=1000")).map(mapVisitRow),
+                    (await get("sources", "?limit=40")).map(mapVisitRow),
                     visitCols,
                 );
                 table(
@@ -486,24 +811,10 @@
                     (await get("channels")).map(mapVisitRow),
                     visitCols,
                 );
-                table(
-                    document.getElementById("particles"),
-                    ["PATH", "VIEWS", "ATTENTION"],
-                    (await get("particles", "?limit=1000")).map((p) => ({
-                        pathname: p.pathname,
-                        views: p.views,
-                        attention_ms: fmt(p.attention_ms),
-                    })),
-                    [
-                        ["pathname", ""],
-                        ["views", "num"],
-                        ["attention_ms", "num"],
-                    ],
-                );
             }
 
             refresh();
-            setInterval(refresh, 5000);
+            setInterval(refresh, 8000);
         </script>
     </body>
 </html>
