@@ -260,15 +260,21 @@
             .pulse-stack {
                 width: 100%;
                 display: flex;
-                flex-direction: column;
-                justify-content: flex-end;
+                flex-direction: row;
+                align-items: flex-end;
+                justify-content: center;
                 gap: 1px;
                 height: 68px;
             }
             .pulse-bar {
-                width: 100%;
+                flex: 1 1 0;
+                min-width: 2px;
                 border-radius: 1px 1px 0 0;
                 min-height: 0;
+            }
+            .pulse-bar.neurons {
+                background: var(--cyber-green);
+                opacity: 0.9;
             }
             .pulse-bar.views {
                 background: var(--cyber-cyan);
@@ -276,7 +282,7 @@
             }
             .pulse-bar.attn {
                 background: var(--cyber-magenta);
-                opacity: 0.55;
+                opacity: 0.6;
             }
             .pulse-lab {
                 font-size: 9px;
@@ -527,8 +533,8 @@
             <div class="section-label">pulse</div>
             <div class="pulse" id="pulse"></div>
             <p class="hint">
-                cyan = pageviews · magenta = attention · day buckets (hour in
-                24h window)
+                green = neurons · cyan = pageviews · magenta = attention · day
+                buckets (hour in 24h window)
             </p>
 
             <div class="section-label">landings · exits</div>
@@ -989,25 +995,28 @@
                     el.innerHTML = `<div class="pulse-empty">— no pulse in window</div>`;
                     return;
                 }
+                const maxN = Math.max(1, ...rows.map((r) => r.neurons || 0));
                 const maxV = Math.max(1, ...rows.map((r) => r.views || 0));
                 const maxA = Math.max(
                     1,
                     ...rows.map((r) => r.attention_ms || 0),
                 );
+                const h = (v, max) =>
+                    v > 0 ? Math.max(2, Math.round((v / max) * 100)) : 0;
                 el.innerHTML = rows
                     .map((r) => {
-                        const vh = Math.round(((r.views || 0) / maxV) * 100);
-                        const ah = Math.round(
-                            ((r.attention_ms || 0) / maxA) * 100,
-                        );
+                        const n = r.neurons || 0;
+                        const v = r.views || 0;
+                        const a = r.attention_ms || 0;
                         const lab =
                             bucket === "hour"
                                 ? fmtHour(r.t)
                                 : fmtDay(r.t).slice(5);
-                        return `<div class="pulse-col" title="${fmtStamp(r.t)} · ${r.views || 0} views · ${fmt(r.attention_ms)} att · ${r.neurons || 0} neurons">
+                        return `<div class="pulse-col" title="${fmtStamp(r.t)} · ${n} neurons · ${v} views · ${fmt(a)} att">
             <div class="pulse-stack">
-              <div class="pulse-bar views" style="height:${Math.max(vh * 0.68, r.views ? 2 : 0)}%"></div>
-              <div class="pulse-bar attn" style="height:${Math.max(ah * 0.32, r.attention_ms ? 1 : 0)}%"></div>
+              <div class="pulse-bar neurons" style="height:${h(n, maxN)}%"></div>
+              <div class="pulse-bar views" style="height:${h(v, maxV)}%"></div>
+              <div class="pulse-bar attn" style="height:${h(a, maxA)}%"></div>
             </div>
             <div class="pulse-lab">${lab}</div>
           </div>`;
