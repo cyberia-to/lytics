@@ -17,10 +17,10 @@
 //! of caution, genuinely absent from a non-test build.
 
 use crate::enrich::{Attribution, Device};
-use lytics_event::{EventBody, Kind, Navigation};
-use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use lytics_event::Actor;
+use lytics_event::{EventBody, Kind, Navigation};
+use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use serde_json::json;
 #[cfg(test)]
@@ -328,12 +328,13 @@ pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
     let mut neurons: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
     for e in events {
         if let Some(geo) = &e.geo
-            && let Some(c) = &geo.country {
-                neurons
-                    .entry(c.clone())
-                    .or_default()
-                    .insert(e.body.neuron.as_str());
-            }
+            && let Some(c) = &geo.country
+        {
+            neurons
+                .entry(c.clone())
+                .or_default()
+                .insert(e.body.neuron.as_str());
+        }
     }
     let rows = top_counts(
         events,
@@ -454,9 +455,11 @@ pub fn returns(events: &[Stored], from: u64, to: u64, horizon_ms: u64) -> serde_
     let mut returned: BTreeSet<&str> = BTreeSet::new();
     for e in events {
         if let Some(first) = cohort.get(e.body.neuron.as_str())
-            && e.body.timestamp > *first && e.body.timestamp <= first + horizon_ms {
-                returned.insert(&e.body.neuron);
-            }
+            && e.body.timestamp > *first
+            && e.body.timestamp <= first + horizon_ms
+        {
+            returned.insert(&e.body.neuron);
+        }
     }
     json!({"cohort": cohort.len(), "returned": returned.len(), "horizon_ms": horizon_ms})
 }
@@ -466,22 +469,41 @@ pub fn passages_report(events: &[&Stored], limit: usize) -> serde_json::Value {
     let p = passages(events);
     let total = p.len();
     let views_total: usize = p.iter().map(|x| x.views()).sum();
-    let mut entries: BTreeMap<String, u64> = BTreeMap::new();
-    let mut exits: BTreeMap<String, u64> = BTreeMap::new();
+    // (passages count, set of neurons)
+    let mut entries: BTreeMap<String, (u64, BTreeSet<&str>)> = BTreeMap::new();
+    let mut exits: BTreeMap<String, (u64, BTreeSet<&str>)> = BTreeMap::new();
     for x in &p {
+        let neuron = x
+            .events
+            .first()
+            .map(|e| e.body.neuron.as_str())
+            .unwrap_or("");
         if let Some(e) = x.entry() {
-            *entries.entry(e.to_string()).or_default() += 1;
+            let slot = entries.entry(e.to_string()).or_default();
+            slot.0 += 1;
+            if !neuron.is_empty() {
+                slot.1.insert(neuron);
+            }
         }
         if let Some(e) = x.exit() {
-            *exits.entry(e.to_string()).or_default() += 1;
+            let slot = exits.entry(e.to_string()).or_default();
+            slot.0 += 1;
+            if !neuron.is_empty() {
+                slot.1.insert(neuron);
+            }
         }
     }
-    let top = |m: BTreeMap<String, u64>| {
-        let mut rows: Vec<_> = m.into_iter().collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let top = |m: BTreeMap<String, (u64, BTreeSet<&str>)>| {
+        let mut rows: Vec<_> = m
+            .into_iter()
+            .map(|(k, (passages, neurons))| (k, passages, neurons.len() as u64))
+            .collect();
+        rows.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)).then(a.0.cmp(&b.0)));
         rows.truncate(limit);
         rows.into_iter()
-            .map(|(k, n)| json!({"pathname": k, "passages": n}))
+            .map(|(k, passages, neurons)| {
+                json!({"pathname": k, "passages": passages, "neurons": neurons})
+            })
             .collect::<Vec<_>>()
     };
     json!({
@@ -626,8 +648,10 @@ mod tests {
 
     #[test]
     fn attention_sums_into_overview() {
-        let events = [ev("n1", "/a", 1, Some(Navigation::External), 0),
-            ev("n1", "/a", 2, None, 42_000)];
+        let events = [
+            ev("n1", "/a", 1, Some(Navigation::External), 0),
+            ev("n1", "/a", 2, None, 42_000),
+        ];
         let refs: Vec<&Stored> = events.iter().collect();
         let o = overview(&refs);
         assert_eq!(o["attention_ms"], 42_000);

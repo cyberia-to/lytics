@@ -450,8 +450,8 @@
                 </div>
             </div>
             <p class="hint">
-                where visits open and close — the SEO surface that actually
-                catches attention
+                neurons = unique visitors who entered / left here · visits =
+                passage count (one person can bounce many times)
             </p>
 
             <div class="section-label">top pages</div>
@@ -681,26 +681,29 @@
                 const series = await get("timeseries", `?bucket=${w.bucket}`);
                 renderPulse(Array.isArray(series) ? series : [], w.bucket);
 
-                // landings / exits
+                // landings / exits — neurons = unique visitors; visits = passages
                 const pass = await get("passages", "?limit=25");
                 const pathCols = [
                     ["pathname", ""],
+                    ["neurons", "num"],
                     ["passages", "num"],
                 ];
                 table(
                     document.getElementById("entries"),
-                    ["ENTRY", "VISITS"],
+                    ["ENTRY", "NEURONS", "VISITS"],
                     (pass.entries || []).map((r) => ({
                         pathname: shortPath(r.pathname),
+                        neurons: r.neurons ?? "—",
                         passages: r.passages,
                     })),
                     pathCols,
                 );
                 table(
                     document.getElementById("exits"),
-                    ["EXIT", "VISITS"],
+                    ["EXIT", "NEURONS", "VISITS"],
                     (pass.exits || []).map((r) => ({
                         pathname: shortPath(r.pathname),
+                        neurons: r.neurons ?? "—",
                         passages: r.passages,
                     })),
                     pathCols,

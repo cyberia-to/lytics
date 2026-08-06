@@ -61,7 +61,7 @@
 //!   rollup rules need to join back against.
 
 use crate::reports::Stored;
-use inf_eval::{eval, Ctx, EvalError, Output};
+use inf_eval::{Ctx, EvalError, Output, eval};
 use inf_parse::parse;
 use inf_plan::plan;
 use inf_source::LocalSource;
@@ -155,7 +155,16 @@ fn events_source(events: &[&Stored]) -> LocalSource {
         .collect();
     s.add(
         "events",
-        &["neuron", "pathname", "ts", "kind", "ms", "actor", "agent_name", "arrival"],
+        &[
+            "neuron",
+            "pathname",
+            "ts",
+            "kind",
+            "ms",
+            "actor",
+            "agent_name",
+            "arrival",
+        ],
         rows,
     );
 
@@ -175,7 +184,11 @@ fn events_source(events: &[&Stored]) -> LocalSource {
             ]
         })
         .collect();
-    s.add("attrib_ev", &["neuron", "ts", "source", "channel"], attrib_rows);
+    s.add(
+        "attrib_ev",
+        &["neuron", "ts", "source", "channel"],
+        attrib_rows,
+    );
 
     // every filtered relation below carries `ts` even though most queries
     // never bind it — WITHOUT it, two real events from the same neuron with
@@ -189,7 +202,11 @@ fn events_source(events: &[&Stored]) -> LocalSource {
         .iter()
         .filter_map(|e| {
             let c = e.geo.as_ref()?.country.as_ref()?;
-            Some(vec![Value::str(&e.body.neuron), Value::str(c), Value::int(e.body.timestamp as i64)])
+            Some(vec![
+                Value::str(&e.body.neuron),
+                Value::str(c),
+                Value::int(e.body.timestamp as i64),
+            ])
         })
         .collect();
     s.add("geo_ev", &["neuron", "country", "ts"], geo_rows);
@@ -198,7 +215,11 @@ fn events_source(events: &[&Stored]) -> LocalSource {
         .iter()
         .filter_map(|e| {
             let b = e.device.browser.as_ref()?;
-            Some(vec![Value::str(&e.body.neuron), Value::str(b), Value::int(e.body.timestamp as i64)])
+            Some(vec![
+                Value::str(&e.body.neuron),
+                Value::str(b),
+                Value::int(e.body.timestamp as i64),
+            ])
         })
         .collect();
     s.add("browser_ev", &["neuron", "browser", "ts"], browser_rows);
@@ -207,7 +228,11 @@ fn events_source(events: &[&Stored]) -> LocalSource {
         .iter()
         .filter_map(|e| {
             let o = e.device.os.as_ref()?;
-            Some(vec![Value::str(&e.body.neuron), Value::str(o), Value::int(e.body.timestamp as i64)])
+            Some(vec![
+                Value::str(&e.body.neuron),
+                Value::str(o),
+                Value::int(e.body.timestamp as i64),
+            ])
         })
         .collect();
     s.add("os_ev", &["neuron", "os", "ts"], os_rows);
@@ -216,7 +241,11 @@ fn events_source(events: &[&Stored]) -> LocalSource {
         .iter()
         .filter_map(|e| {
             let c = e.device.device.as_ref()?;
-            Some(vec![Value::str(&e.body.neuron), Value::str(c), Value::int(e.body.timestamp as i64)])
+            Some(vec![
+                Value::str(&e.body.neuron),
+                Value::str(c),
+                Value::int(e.body.timestamp as i64),
+            ])
         })
         .collect();
     s.add("class_ev", &["neuron", "class", "ts"], class_rows);
@@ -268,7 +297,12 @@ fn passage_ids(events: &[&Stored]) -> BTreeMap<(String, i64), i64> {
     let arr_rows: Vec<Tuple> = events
         .iter()
         .filter(|e| e.is_arrival())
-        .map(|e| vec![Value::str(&e.body.neuron), Value::int(e.body.timestamp as i64)])
+        .map(|e| {
+            vec![
+                Value::str(&e.body.neuron),
+                Value::int(e.body.timestamp as i64),
+            ]
+        })
         .collect();
     src.add("arrival_ev", &["neuron", "ts"], arr_rows);
 
@@ -286,7 +320,10 @@ fn passage_ids(events: &[&Stored]) -> BTreeMap<(String, i64), i64> {
 
     let mut per_neuron: BTreeMap<&str, std::collections::BTreeSet<i64>> = BTreeMap::new();
     for e in events {
-        per_neuron.entry(e.body.neuron.as_str()).or_default().insert(e.body.timestamp as i64);
+        per_neuron
+            .entry(e.body.neuron.as_str())
+            .or_default()
+            .insert(e.body.timestamp as i64);
     }
 
     let mut out = BTreeMap::new();
@@ -349,7 +386,11 @@ fn passage_source(events: &[&Stored]) -> LocalSource {
             ]
         })
         .collect();
-    s.add("attrib_ev", &["neuron", "ts", "source", "channel"], attrib_rows);
+    s.add(
+        "attrib_ev",
+        &["neuron", "ts", "source", "channel"],
+        attrib_rows,
+    );
 
     s
 }
@@ -389,7 +430,10 @@ fn passages_totals(src: &LocalSource) -> (u64, u64) {
         src,
         "dpid[neuron, passage_id] := pid{neuron, ts, passage_id}\n?[count(passage_id)] := dpid[neuron, passage_id]",
     ) as u64;
-    let views_total = scalar(src, r#"?[count(pathname)] := ev2{kind: "pageview", pathname}"#) as u64;
+    let views_total = scalar(
+        src,
+        r#"?[count(pathname)] := ev2{kind: "pageview", pathname}"#,
+    ) as u64;
     (total, views_total)
 }
 
@@ -411,7 +455,10 @@ fn visit_metrics(events: &[&Stored], views: u64, attention_ms: u64) -> serde_jso
         ),
     ) as u64;
     let single_page_visits = visits.saturating_sub(multi_page);
-    let views_per_visit_milli = views.checked_mul(1000).and_then(|v| v.checked_div(visits)).unwrap_or(0);
+    let views_per_visit_milli = views
+        .checked_mul(1000)
+        .and_then(|v| v.checked_div(visits))
+        .unwrap_or(0);
     let attention_ms_per_visit = attention_ms.checked_div(visits).unwrap_or(0);
     json!({
         "visits": visits,
@@ -423,27 +470,64 @@ fn visit_metrics(events: &[&Stored], views: u64, attention_ms: u64) -> serde_jso
 
 /// entries/exits by pathname (top-N) plus passage/view totals — the
 /// `passages` report.
+///
+/// Each row carries:
+/// - `passages` — how many visits opened/closed on this path
+/// - `neurons`  — distinct visitors who ever opened/closed on this path
+///
+/// The juice is neurons: one neuron bouncing home ten times is one neuron,
+/// not ten "unique landings".
 pub fn passages_report(events: &[&Stored], limit: usize) -> serde_json::Value {
     let src = passage_source(events);
     let (total, views_total) = passages_totals(&src);
 
-    let top_by_pathname = |rules: &str, script: &str| -> Vec<serde_json::Value> {
-        let full = format!("{rules}{script}");
-        let mut rows: Vec<(String, u64)> = q(&src, &full)
-            .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
-            .unwrap_or_default();
-        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    // visits count + distinct-neuron count, merged and sorted by neurons.
+    let top_by_pathname = |rules: &str, rel: &str| -> Vec<serde_json::Value> {
+        let visits: BTreeMap<String, u64> = q(
+            &src,
+            &format!(
+                "{rules}?[pathname, count(passage_id)] := {rel}[neuron, passage_id, pathname]"
+            ),
+        )
+        .map(|out| {
+            out.rows
+                .iter()
+                .map(|r| (as_str(&r[0]), as_u64(&r[1])))
+                .collect()
+        })
+        .unwrap_or_default();
+        // project (pathname, neuron) first so count(neuron) is distinct neurons
+        let neurons: BTreeMap<String, u64> = q(
+            &src,
+            &format!(
+                "{rules}dn[pathname, neuron] := {rel}[neuron, passage_id, pathname]\n?[pathname, count(neuron)] := dn[pathname, neuron]"
+            ),
+        )
+        .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+        .unwrap_or_default();
+
+        let mut rows: Vec<_> = visits
+            .into_iter()
+            .map(|(path, passages)| {
+                let neurons = neurons.get(&path).copied().unwrap_or(0);
+                (path, passages, neurons)
+            })
+            .collect();
+        // primary sort: unique neurons (the juice), then visits, then path
+        rows.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)).then(a.0.cmp(&b.0)));
         rows.truncate(limit);
-        rows.into_iter().map(|(k, n)| json!({"pathname": k, "passages": n})).collect()
+        rows.into_iter()
+            .map(|(pathname, passages, neurons)| {
+                json!({
+                    "pathname": pathname,
+                    "passages": passages,
+                    "neurons": neurons,
+                })
+            })
+            .collect()
     };
-    let entries = top_by_pathname(
-        RULE_EPATH,
-        "?[pathname, count(passage_id)] := epath[neuron, passage_id, pathname]",
-    );
-    let exits = top_by_pathname(
-        RULE_XPATH,
-        "?[pathname, count(passage_id)] := xpath[neuron, passage_id, pathname]",
-    );
+    let entries = top_by_pathname(RULE_EPATH, "epath");
+    let exits = top_by_pathname(RULE_XPATH, "xpath");
 
     json!({
         "passages": total,
@@ -464,9 +548,16 @@ fn visit_breakdown(src: &LocalSource, rel: &str, col: &str, limit: usize) -> ser
     let key_rule = if rel == "ksrc" { RULE_KSRC } else { RULE_KCHAN };
     let visits: BTreeMap<String, u64> = q(
         src,
-        &format!("{RULE_KT}{key_rule}?[{col}, count(passage_id)] := {rel}[neuron, passage_id, {col}]"),
+        &format!(
+            "{RULE_KT}{key_rule}?[{col}, count(passage_id)] := {rel}[neuron, passage_id, {col}]"
+        ),
     )
-    .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+    .map(|out| {
+        out.rows
+            .iter()
+            .map(|r| (as_str(&r[0]), as_u64(&r[1])))
+            .collect()
+    })
     .unwrap_or_default();
     let views: BTreeMap<String, u64> = q(
         src,
@@ -490,26 +581,30 @@ fn visit_breakdown(src: &LocalSource, rel: &str, col: &str, limit: usize) -> ser
         .map(|(k, v)| {
             let views = views.get(k).copied().unwrap_or(0);
             let att = attn.get(k).copied().unwrap_or(0);
-            let vpv_milli = views.checked_mul(1000).and_then(|x| x.checked_div(*v)).unwrap_or(0);
+            let vpv_milli = views
+                .checked_mul(1000)
+                .and_then(|x| x.checked_div(*v))
+                .unwrap_or(0);
             let att_pv = att.checked_div(*v).unwrap_or(0);
             (k.clone(), *v, views, att, vpv_milli, att_pv)
         })
         .collect();
     rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     rows.truncate(limit);
-    json!(rows
-        .into_iter()
-        .map(|(k, visits, views, att, vpv_milli, att_pv)| json!({
-            "key": k,
-            "source": k,
-            "channel": k,
-            "visits": visits,
-            "views": views,
-            "attention_ms": att,
-            "views_per_visit_milli": vpv_milli,
-            "attention_ms_per_visit": att_pv,
-        }))
-        .collect::<Vec<_>>())
+    json!(
+        rows.into_iter()
+            .map(|(k, visits, views, att, vpv_milli, att_pv)| json!({
+                "key": k,
+                "source": k,
+                "channel": k,
+                "visits": visits,
+                "views": views,
+                "attention_ms": att,
+                "views_per_visit_milli": vpv_milli,
+                "attention_ms_per_visit": att_pv,
+            }))
+            .collect::<Vec<_>>()
+    )
 }
 
 pub fn sources(events: &[&Stored], limit: usize) -> serde_json::Value {
@@ -555,16 +650,17 @@ pub fn funnel(events: &[&Stored], steps: &[String]) -> serde_json::Value {
                 i - 1
             ));
         }
-        let script = format!(
-            "{prefix}dn[neuron] := {rel}[neuron, t{i}]\n?[count(neuron)] := dn[neuron]"
-        );
+        let script =
+            format!("{prefix}dn[neuron] := {rel}[neuron, t{i}]\n?[count(neuron)] := dn[neuron]");
         counts.push(scalar(&src, &script) as u64);
     }
-    json!(steps
-        .iter()
-        .zip(counts)
-        .map(|(s, n)| json!({"step": s, "neurons": n}))
-        .collect::<Vec<_>>())
+    json!(
+        steps
+            .iter()
+            .zip(counts)
+            .map(|(s, n)| json!({"step": s, "neurons": n}))
+            .collect::<Vec<_>>()
+    )
 }
 
 /// scalar helper: run a query expected to return exactly one row, one column.
@@ -580,8 +676,14 @@ fn scalar(src: &LocalSource, script: &str) -> i64 {
 /// (`reports::overview`), which still needs `passages()`.
 pub fn overview_counts(events: &[&Stored]) -> serde_json::Value {
     let src = events_source(events);
-    let neurons = scalar(&src, "dn[neuron] := events{neuron}\n?[count(neuron)] := dn[neuron]");
-    let views = scalar(&src, r#"?[count(pathname)] := events{kind: "pageview", pathname}"#);
+    let neurons = scalar(
+        &src,
+        "dn[neuron] := events{neuron}\n?[count(neuron)] := dn[neuron]",
+    );
+    let views = scalar(
+        &src,
+        r#"?[count(pathname)] := events{kind: "pageview", pathname}"#,
+    );
     let attention = scalar(&src, r#"?[sum(ms)] := events{kind: "attention", ms}"#);
     let agent_neurons = scalar(
         &src,
@@ -665,8 +767,10 @@ pub fn timeseries(events: &[&Stored], bucket_ms: u64) -> serde_json::Value {
 pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
     let src = events_source(events);
     let mut attention: BTreeMap<String, u64> = BTreeMap::new();
-    if let Ok(out) = q(&src, r#"?[pathname, sum(ms)] := events{kind: "attention", pathname, ms}"#)
-    {
+    if let Ok(out) = q(
+        &src,
+        r#"?[pathname, sum(ms)] := events{kind: "attention", pathname, ms}"#,
+    ) {
         for r in out.rows {
             attention.insert(as_str(&r[0]), as_u64(&r[1]));
         }
@@ -675,7 +779,12 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
         &src,
         r#"?[pathname, count(neuron)] := events{kind: "pageview", pathname, neuron}"#,
     )
-    .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+    .map(|out| {
+        out.rows
+            .iter()
+            .map(|r| (as_str(&r[0]), as_u64(&r[1])))
+            .collect()
+    })
     .unwrap_or_default();
     // inf's :sort took the aggregated column's inherited name in testing, but
     // ties need a stable secondary key to match the Rust reference exactly —
@@ -695,19 +804,29 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
 pub fn actors(events: &[&Stored]) -> serde_json::Value {
     let src = events_source(events);
 
-    let human_neurons =
-        scalar(&src, r#"dn[neuron] := events{actor: "human", neuron}
-?[count(neuron)] := dn[neuron]"#);
-    let human_views =
-        scalar(&src, r#"?[count(pathname)] := events{actor: "human", kind: "pageview", pathname}"#);
-    let human_attn =
-        scalar(&src, r#"?[sum(ms)] := events{actor: "human", kind: "attention", ms}"#);
+    let human_neurons = scalar(
+        &src,
+        r#"dn[neuron] := events{actor: "human", neuron}
+?[count(neuron)] := dn[neuron]"#,
+    );
+    let human_views = scalar(
+        &src,
+        r#"?[count(pathname)] := events{actor: "human", kind: "pageview", pathname}"#,
+    );
+    let human_attn = scalar(
+        &src,
+        r#"?[sum(ms)] := events{actor: "human", kind: "attention", ms}"#,
+    );
 
-    let agent_neurons =
-        scalar(&src, r#"dn[neuron] := events{actor: "agent", neuron}
-?[count(neuron)] := dn[neuron]"#);
-    let agent_views =
-        scalar(&src, r#"?[count(pathname)] := events{actor: "agent", kind: "pageview", pathname}"#);
+    let agent_neurons = scalar(
+        &src,
+        r#"dn[neuron] := events{actor: "agent", neuron}
+?[count(neuron)] := dn[neuron]"#,
+    );
+    let agent_views = scalar(
+        &src,
+        r#"?[count(pathname)] := events{actor: "agent", kind: "pageview", pathname}"#,
+    );
 
     // declared: per agent name, count of ALL that name's events (matches the
     // existing Rust behavior precisely — it is not view-gated either).
@@ -716,12 +835,17 @@ pub fn actors(events: &[&Stored]) -> serde_json::Value {
         r#"?[agent_name, count(neuron)] := events{actor: "agent", agent_name, neuron}"#,
     )
     .map(|out| {
-        let mut rows: Vec<(String, u64)> =
-            out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect();
+        let mut rows: Vec<(String, u64)> = out
+            .rows
+            .iter()
+            .map(|r| (as_str(&r[0]), as_u64(&r[1])))
+            .collect();
         rows.retain(|(name, _)| !name.is_empty());
         rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         rows.truncate(16);
-        rows.into_iter().map(|(n, c)| json!({"name": n, "views": c})).collect::<Vec<_>>()
+        rows.into_iter()
+            .map(|(n, c)| json!({"name": n, "views": c}))
+            .collect::<Vec<_>>()
     })
     .unwrap_or_default();
 
@@ -733,9 +857,15 @@ pub fn actors(events: &[&Stored]) -> serde_json::Value {
 
 pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
     let src = events_source(events);
-    let counts: Vec<(String, u64)> = q(&src, "?[country, count(neuron)] := geo_ev{country, neuron}")
-        .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
-        .unwrap_or_default();
+    let counts: Vec<(String, u64)> =
+        q(&src, "?[country, count(neuron)] := geo_ev{country, neuron}")
+            .map(|out| {
+                out.rows
+                    .iter()
+                    .map(|r| (as_str(&r[0]), as_u64(&r[1])))
+                    .collect()
+            })
+            .unwrap_or_default();
     let distinct: BTreeMap<String, u64> =
         q(&src, "dn[country, neuron] := geo_ev{country, neuron}\n?[country, count(neuron)] := dn[country, neuron]")
             .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
@@ -743,23 +873,31 @@ pub fn countries(events: &[&Stored], limit: usize) -> serde_json::Value {
     let mut rows = counts;
     rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     rows.truncate(limit);
-    json!(rows
-        .into_iter()
-        .map(|(c, n)| {
-            let neurons = distinct.get(&c).copied().unwrap_or(0);
-            json!({"country": c, "events": n, "neurons": neurons})
-        })
-        .collect::<Vec<_>>())
+    json!(
+        rows.into_iter()
+            .map(|(c, n)| {
+                let neurons = distinct.get(&c).copied().unwrap_or(0);
+                json!({"country": c, "events": n, "neurons": neurons})
+            })
+            .collect::<Vec<_>>()
+    )
 }
 
 fn top_field(src: &LocalSource, rel: &str, col: &str, limit: usize) -> Vec<serde_json::Value> {
     let script = format!("?[{col}, count(neuron)] := {rel}{{{col}, neuron}}");
     let mut rows: Vec<(String, u64)> = q(src, &script)
-        .map(|out| out.rows.iter().map(|r| (as_str(&r[0]), as_u64(&r[1]))).collect())
+        .map(|out| {
+            out.rows
+                .iter()
+                .map(|r| (as_str(&r[0]), as_u64(&r[1])))
+                .collect()
+        })
         .unwrap_or_default();
     rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     rows.truncate(limit);
-    rows.into_iter().map(|(k, n)| json!({col: k, "events": n})).collect()
+    rows.into_iter()
+        .map(|(k, n)| json!({col: k, "events": n}))
+        .collect()
 }
 
 pub fn devices(events: &[&Stored], limit: usize) -> serde_json::Value {
@@ -791,13 +929,21 @@ pub fn retention(events: &[Stored], weeks: usize) -> serde_json::Value {
     // pattern verified live: projecting to (neuron, cohort, offset) collapses
     // a neuron's same-cell events to one row before the final count.
     let mut fs_src = LocalSource::new();
-    let fs_rows: Vec<Tuple> =
-        fs.rows.iter().map(|r| vec![r[0].clone(), r[1].clone()]).collect();
+    let fs_rows: Vec<Tuple> = fs
+        .rows
+        .iter()
+        .map(|r| vec![r[0].clone(), r[1].clone()])
+        .collect();
     fs_src.add("fs", &["neuron", "first"], fs_rows);
     // events also needed in the same source for the join
     let ev_rows: Vec<Tuple> = refs
         .iter()
-        .map(|e| vec![Value::str(&e.body.neuron), Value::int(e.body.timestamp as i64)])
+        .map(|e| {
+            vec![
+                Value::str(&e.body.neuron),
+                Value::int(e.body.timestamp as i64),
+            ]
+        })
         .collect();
     fs_src.add("ev", &["neuron", "ts"], ev_rows);
 
@@ -814,7 +960,10 @@ pub fn retention(events: &[Stored], weeks: usize) -> serde_json::Value {
         let cohort = as_i64(&r[0]);
         let offset = as_i64(&r[1]);
         if offset >= 0 && (offset as usize) < weeks {
-            matrix.entry(cohort).or_default().insert(offset, as_u64(&r[2]));
+            matrix
+                .entry(cohort)
+                .or_default()
+                .insert(offset, as_u64(&r[2]));
         }
     }
     let rows: Vec<_> = matrix
@@ -836,7 +985,12 @@ pub fn returns(events: &[Stored], from: u64, to: u64, horizon_ms: u64) -> serde_
     let mut src = LocalSource::new();
     let ev_rows: Vec<Tuple> = refs
         .iter()
-        .map(|e| vec![Value::str(&e.body.neuron), Value::int(e.body.timestamp as i64)])
+        .map(|e| {
+            vec![
+                Value::str(&e.body.neuron),
+                Value::int(e.body.timestamp as i64),
+            ]
+        })
         .collect();
     src.add("ev", &["neuron", "ts"], ev_rows);
 
@@ -855,11 +1009,20 @@ pub fn returns(events: &[Stored], from: u64, to: u64, horizon_ms: u64) -> serde_
     src2.add(
         "fs",
         &["neuron", "first"],
-        cohort.rows.iter().map(|r| vec![r[0].clone(), r[1].clone()]).collect(),
+        cohort
+            .rows
+            .iter()
+            .map(|r| vec![r[0].clone(), r[1].clone()])
+            .collect(),
     );
     let ev_rows2: Vec<Tuple> = refs
         .iter()
-        .map(|e| vec![Value::str(&e.body.neuron), Value::int(e.body.timestamp as i64)])
+        .map(|e| {
+            vec![
+                Value::str(&e.body.neuron),
+                Value::int(e.body.timestamp as i64),
+            ]
+        })
         .collect();
     src2.add("ev", &["neuron", "ts"], ev_rows2);
 
@@ -894,43 +1057,91 @@ mod tests {
             body: EventBody {
                 neuron: neuron.into(),
                 actor,
-                agent: agent_name.map(|n| AgentDecl { name: n.into(), operator: "op".into() }),
+                agent: agent_name.map(|n| AgentDecl {
+                    name: n.into(),
+                    operator: "op".into(),
+                }),
                 kind: kind.clone(),
                 navigation: nav,
                 hostname: "cyber.page".into(),
                 pathname: path.into(),
                 referrer: None,
                 utm: None,
-                attention: (att > 0).then_some(lytics_event::Attention { ms: att, scroll_depth: 0 }),
+                attention: (att > 0).then_some(lytics_event::Attention {
+                    ms: att,
+                    scroll_depth: 0,
+                }),
                 props: None,
                 revenue: None,
                 timestamp: ts,
             },
             event_hash: format!("{neuron}-{path}-{ts}-{kind:?}"),
-            attribution: Attribution { source: None, channel: Channel::Direct },
-            device: Device { browser: None, browser_version: None, os: None, device: None },
+            attribution: Attribution {
+                source: None,
+                channel: Channel::Direct,
+            },
+            device: Device {
+                browser: None,
+                browser_version: None,
+                os: None,
+                device: None,
+            },
             geo: None,
             received_at: ts,
         }
     }
 
     fn pv(neuron: &str, path: &str, ts: u64) -> Stored {
-        ev(neuron, path, ts, Kind::Pageview, Some(Navigation::External), 0, Actor::Human, None)
+        ev(
+            neuron,
+            path,
+            ts,
+            Kind::Pageview,
+            Some(Navigation::External),
+            0,
+            Actor::Human,
+            None,
+        )
     }
     /// an internal-navigation pageview — not an arrival, stays inside the
     /// current passage.
     fn pv_internal(neuron: &str, path: &str, ts: u64) -> Stored {
-        ev(neuron, path, ts, Kind::Pageview, Some(Navigation::Internal), 0, Actor::Human, None)
+        ev(
+            neuron,
+            path,
+            ts,
+            Kind::Pageview,
+            Some(Navigation::Internal),
+            0,
+            Actor::Human,
+            None,
+        )
     }
     fn attn(neuron: &str, path: &str, ts: u64, ms: u64) -> Stored {
-        ev(neuron, path, ts, Kind::Attention, None, ms, Actor::Human, None)
+        ev(
+            neuron,
+            path,
+            ts,
+            Kind::Attention,
+            None,
+            ms,
+            Actor::Human,
+            None,
+        )
     }
     fn with_attrib(mut s: Stored, source: Option<&str>, channel: Channel) -> Stored {
-        s.attribution = Attribution { source: source.map(String::from), channel };
+        s.attribution = Attribution {
+            source: source.map(String::from),
+            channel,
+        };
         s
     }
     fn with_geo(mut s: Stored, country: &str) -> Stored {
-        s.geo = Some(Geo { country: Some(country.into()), region: None, city: None });
+        s.geo = Some(Geo {
+            country: Some(country.into()),
+            region: None,
+            city: None,
+        });
         s
     }
     fn with_device(mut s: Stored, browser: &str, os: &str, class: &str) -> Stored {
@@ -964,7 +1175,16 @@ mod tests {
             pv("n1", "/a", 1000),
             attn("n1", "/a", 1100, 5000),
             pv("n2", "/b", 1200),
-            ev("n3", "/c", 1300, Kind::Pageview, Some(Navigation::External), 0, Actor::Agent, Some("bot")),
+            ev(
+                "n3",
+                "/c",
+                1300,
+                Kind::Pageview,
+                Some(Navigation::External),
+                0,
+                Actor::Agent,
+                Some("bot"),
+            ),
         ];
         let r = refs(&events);
         // the reference `overview()` computes the same four counts plus
@@ -983,9 +1203,9 @@ mod tests {
     }
 
     fn sort_by_pathname(v: &mut serde_json::Value) {
-        v.as_array_mut().unwrap().sort_by(|a, b| {
-            a["pathname"].as_str().cmp(&b["pathname"].as_str())
-        });
+        v.as_array_mut()
+            .unwrap()
+            .sort_by(|a, b| a["pathname"].as_str().cmp(&b["pathname"].as_str()));
     }
 
     #[test]
@@ -1030,9 +1250,36 @@ mod tests {
         let events = [
             pv("n1", "/a", 1000),
             attn("n1", "/a", 1100, 2000),
-            ev("n2", "/b", 1200, Kind::Pageview, Some(Navigation::External), 0, Actor::Agent, Some("claude")),
-            ev("n2", "/c", 1300, Kind::Pageview, Some(Navigation::External), 0, Actor::Agent, Some("claude")),
-            ev("n3", "/d", 1400, Kind::Pageview, Some(Navigation::External), 0, Actor::Agent, Some("perplexity")),
+            ev(
+                "n2",
+                "/b",
+                1200,
+                Kind::Pageview,
+                Some(Navigation::External),
+                0,
+                Actor::Agent,
+                Some("claude"),
+            ),
+            ev(
+                "n2",
+                "/c",
+                1300,
+                Kind::Pageview,
+                Some(Navigation::External),
+                0,
+                Actor::Agent,
+                Some("claude"),
+            ),
+            ev(
+                "n3",
+                "/d",
+                1400,
+                Kind::Pageview,
+                Some(Navigation::External),
+                0,
+                Actor::Agent,
+                Some("perplexity"),
+            ),
         ];
         let r = refs(&events);
         let reference = crate::reports::actors(&r);
@@ -1076,9 +1323,9 @@ mod tests {
     }
 
     fn sort_by_t(v: &mut serde_json::Value) {
-        v.as_array_mut().unwrap().sort_by(|a, b| {
-            a["t"].as_u64().cmp(&b["t"].as_u64())
-        });
+        v.as_array_mut()
+            .unwrap()
+            .sort_by(|a, b| a["t"].as_u64().cmp(&b["t"].as_u64()));
     }
 
     #[test]
@@ -1307,7 +1554,16 @@ mod tests {
             attn("n1", "/a", 1100, 5000),
             pv_internal("n1", "/b", 1200), // same passage as /a
             pv("n2", "/a", 1300),          // single-page visit
-            ev("n3", "/c", 1400, Kind::Pageview, Some(Navigation::External), 0, Actor::Agent, Some("bot")),
+            ev(
+                "n3",
+                "/c",
+                1400,
+                Kind::Pageview,
+                Some(Navigation::External),
+                0,
+                Actor::Agent,
+                Some("bot"),
+            ),
         ];
         let r = refs(&events);
         let reference = crate::reports::overview(&r);
