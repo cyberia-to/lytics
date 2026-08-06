@@ -301,6 +301,32 @@
                 }
             }
 
+            /* retention heat cells */
+            .ret-cell {
+                text-align: right;
+                font-variant-numeric: tabular-nums;
+                font-weight: 700;
+                font-size: 12px;
+                letter-spacing: 0.5px;
+                border-radius: 2px;
+                padding: 6px 8px !important;
+                min-width: 52px;
+            }
+            .ret-cell .ret-n {
+                display: block;
+                font-size: 10px;
+                font-weight: 400;
+                color: #555;
+                margin-top: 2px;
+            }
+            .ret-cell.zero {
+                color: #333;
+                font-weight: 400;
+            }
+            .ret-cell.w0 {
+                color: var(--cyber-green);
+            }
+
             /* tables — match .cyber-table */
             .table-wrap {
                 overflow-x: auto;
@@ -422,6 +448,17 @@
                 core: neurons → visits → views · derivatives: depth =
                 views/visit · dwell = attention/visit · att/neuron = total
                 looking per unique key
+            </p>
+
+            <div class="section-label">retention</div>
+            <div class="stat-grid" id="ret-kpis"></div>
+            <div class="table-wrap" style="margin-top: 12px">
+                <table class="cyber-table" id="retention"></table>
+            </div>
+            <p class="hint">
+                cohort = week of first-seen · W0 = that week · Wn = still active
+                n weeks later · % of cohort size · returns = first seen in
+                window, came back within 7d
             </p>
 
             <div class="section-label">pulse</div>
@@ -613,6 +650,104 @@
                 });
             }
 
+            const WEEK_MS = 7 * 24 * 3600 * 1000;
+
+            function heatStyle(pct) {
+                // 0..100 → green fill intensity on black
+                if (pct == null || pct <= 0) return "";
+                const a = Math.min(0.85, 0.08 + (pct / 100) * 0.75);
+                return `background: rgba(0, 255, 65, ${a.toFixed(3)}); color: ${pct >= 40 ? "#000" : "var(--cyber-green)"}`;
+            }
+
+            function renderRetentionMatrix(rows) {
+                const el = document.getElementById("retention");
+                if (!rows || !rows.length) {
+                    el.innerHTML = `<tbody><tr><td class="empty">— not enough history for cohorts yet</td></tr></tbody>`;
+                    return;
+                }
+                const maxW = Math.max(
+                    ...rows.map((r) => (r.weeks || []).length),
+                    1,
+                );
+                // oldest cohort on top, newest at bottom (classic)
+                const sorted = [...rows].sort(
+                    (a, b) =>
+                        (a.cohort_start_ms || 0) - (b.cohort_start_ms || 0),
+                );
+                const now = Date.now();
+
+                const head =
+                    `<thead><tr><th>COHORT</th><th class="num">SIZE</th>` +
+                    Array.from(
+                        { length: maxW },
+                        (_, i) => `<th class="num">W${i}</th>`,
+                    ).join("") +
+                    `</tr></thead>`;
+
+                const body = sorted
+                    .map((r) => {
+                        const size = r.size || 0;
+                        const weeks = r.weeks || [];
+                        const start = r.cohort_start_ms || 0;
+                        const cells = Array.from({ length: maxW }, (_, i) => {
+                            // week offset not yet elapsed for this cohort
+                            if (start + i * WEEK_MS > now) {
+                                return `<td class="ret-cell zero num">—</td>`;
+                            }
+                            if (i === 0) {
+                                return `<td class="ret-cell w0 num" title="cohort week · size">${size}<span class="ret-n">100%</span></td>`;
+                            }
+                            if (!size) {
+                                return `<td class="ret-cell zero num">—</td>`;
+                            }
+                            const n = weeks[i] || 0;
+                            const pct = Math.round((n / size) * 100);
+                            if (n === 0) {
+                                return `<td class="ret-cell zero num">0%<span class="ret-n">0</span></td>`;
+                            }
+                            return `<td class="ret-cell num" style="${heatStyle(pct)}" title="${n} of ${size} neurons still active">${pct}%<span class="ret-n">${n}</span></td>`;
+                        }).join("");
+                        return `<tr>
+              <td>${fmtDay(start)}</td>
+              <td class="num">${size}</td>
+              ${cells}
+            </tr>`;
+                    })
+                    .join("");
+
+                el.innerHTML = head + `<tbody>${body}</tbody>`;
+            }
+
+            async function renderRetention(w) {
+                // matrix: full event history (server ignores window)
+                const matrix = await get("retention", "?weeks=8");
+                renderRetentionMatrix(Array.isArray(matrix) ? matrix : []);
+
+                // returns: first-seen in current window, came back within 7d
+                const ret = await get("returns", `?horizon_ms=${WEEK_MS}`);
+                const cohort = ret.cohort ?? 0;
+                const returned = ret.returned ?? 0;
+                const rate =
+                    cohort > 0
+                        ? `${Math.round((returned / cohort) * 100)}%`
+                        : "—";
+                document.getElementById("ret-kpis").innerHTML = cards([
+                    [
+                        "NEW (WINDOW)",
+                        cohort,
+                        `first-seen in ${w.label}`,
+                        "yellow",
+                    ],
+                    [
+                        "RETURNED 7D",
+                        returned,
+                        "came back within 7 days",
+                        "cyan",
+                    ],
+                    ["RETURN RATE", rate, "returned / new", "magenta"],
+                ]);
+            }
+
             function renderPulse(rows, bucket) {
                 const el = document.getElementById("pulse");
                 if (!rows || !rows.length) {
@@ -677,6 +812,9 @@
                     ["ATT / NEURON", attN, "looking per unique key", "magenta"],
                 ]);
 
+                // retention — full history matrix + returns in current window
+                await renderRetention(w);
+
                 // pulse
                 const series = await get("timeseries", `?bucket=${w.bucket}`);
                 renderPulse(Array.isArray(series) ? series : [], w.bucket);
@@ -712,7 +850,16 @@
                 // top pages — funnel + attention
                 table(
                     document.getElementById("particles"),
-                    ["PATH", "NEURONS", "VISITS", "VIEWS", "DEPTH", "DWELL", "ATT/N", "ATTENTION"],
+                    [
+                        "PATH",
+                        "NEURONS",
+                        "VISITS",
+                        "VIEWS",
+                        "DEPTH",
+                        "DWELL",
+                        "ATT/N",
+                        "ATTENTION",
+                    ],
                     (await get("particles", "?limit=40")).map((p) => ({
                         pathname: shortPath(p.pathname),
                         neurons: p.neurons ?? "—",
@@ -747,7 +894,15 @@
                 ];
                 table(
                     document.getElementById("countries"),
-                    ["COUNTRY", "NEURONS", "VISITS", "VIEWS", "DEPTH", "DWELL", "ATT/N"],
+                    [
+                        "COUNTRY",
+                        "NEURONS",
+                        "VISITS",
+                        "VIEWS",
+                        "DEPTH",
+                        "DWELL",
+                        "ATT/N",
+                    ],
                     (await get("countries", "?limit=20")).map((r) => ({
                         name: r.country ?? "—",
                         neurons: r.neurons ?? "",
@@ -777,7 +932,15 @@
                     .map((r) => mapFunnel(r.browser ?? "—", r));
                 table(
                     document.getElementById("devices"),
-                    ["CLASS / BROWSER", "NEURONS", "VISITS", "VIEWS", "DEPTH", "DWELL", "ATT/N"],
+                    [
+                        "CLASS / BROWSER",
+                        "NEURONS",
+                        "VISITS",
+                        "VIEWS",
+                        "DEPTH",
+                        "DWELL",
+                        "ATT/N",
+                    ],
                     [...classRows, ...browserRows],
                     funnelCols,
                 );
@@ -834,8 +997,6 @@
                     (await get("channels")).map(mapVisitRow),
                     visitCols,
                 );
-
-            
             }
 
             refresh();
