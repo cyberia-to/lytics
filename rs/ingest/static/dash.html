@@ -657,6 +657,219 @@
                 padding: 24px;
                 letter-spacing: 1px;
             }
+
+            /* funnel builder */
+            .funnel-builder {
+                border: 1px solid #111;
+                border-radius: 2px;
+                background: #050505;
+                padding: 14px 16px;
+            }
+            .funnel-steps {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                align-items: center;
+                margin-bottom: 12px;
+                min-height: 36px;
+            }
+            .funnel-step-chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 0.5px;
+                padding: 6px 8px 6px 12px;
+                border: 1px solid rgba(0, 255, 65, 0.35);
+                border-radius: 2px;
+                background: rgba(0, 255, 65, 0.06);
+                color: var(--cyber-green);
+                max-width: 220px;
+            }
+            .funnel-step-chip .ord {
+                color: #555;
+                font-size: 10px;
+                min-width: 1.2em;
+            }
+            .funnel-step-chip .lab {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .funnel-step-chip button {
+                border: none;
+                background: transparent;
+                color: #666;
+                cursor: pointer;
+                font-size: 14px;
+                line-height: 1;
+                padding: 0 2px;
+                font-family: "Play", sans-serif;
+            }
+            .funnel-step-chip button:hover {
+                color: var(--cyber-red);
+            }
+            .funnel-arrow {
+                color: #333;
+                font-size: 12px;
+            }
+            .funnel-add-row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                align-items: center;
+                margin-bottom: 12px;
+            }
+            .funnel-add-row input {
+                flex: 1 1 160px;
+                min-width: 120px;
+                font-family: "Play", sans-serif;
+                font-size: 13px;
+                padding: 8px 12px;
+                border: 1px solid #222;
+                border-radius: 2px;
+                background: #0a0a0a;
+                color: #eee;
+            }
+            .funnel-add-row input:focus {
+                outline: none;
+                border-color: var(--cyber-green);
+            }
+            .funnel-add-row button,
+            .funnel-presets button {
+                font-family: "Play", sans-serif;
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 1.5px;
+                text-transform: uppercase;
+                padding: 8px 12px;
+                border: 1px solid #222;
+                border-radius: 2px;
+                background: transparent;
+                color: #888;
+                cursor: pointer;
+            }
+            .funnel-add-row button:hover,
+            .funnel-presets button:hover {
+                border-color: var(--cyber-green);
+                color: var(--cyber-green);
+            }
+            .funnel-add-row button.primary {
+                background: var(--cyber-green);
+                border-color: var(--cyber-green);
+                color: #000;
+            }
+            .funnel-presets {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                margin-bottom: 14px;
+            }
+            .funnel-presets .tag {
+                font-size: 11px;
+                letter-spacing: 0.5px;
+                padding: 4px 10px;
+                border: 1px solid #1a1a1a;
+                border-radius: 2px;
+                background: #0a0a0a;
+                color: #777;
+                cursor: pointer;
+                max-width: 160px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .funnel-presets .tag:hover {
+                border-color: var(--cyber-cyan);
+                color: var(--cyber-cyan);
+            }
+            .funnel-presets .tag.in {
+                border-color: rgba(0, 255, 65, 0.4);
+                color: #555;
+                cursor: default;
+            }
+            .funnel-chart {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+            .funnel-row {
+                display: grid;
+                grid-template-columns: minmax(80px, 140px) 1fr auto;
+                gap: 10px;
+                align-items: center;
+            }
+            .funnel-row .step-lab {
+                font-size: 12px;
+                color: #aaa;
+                text-align: right;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .funnel-row .bar-wrap {
+                height: 28px;
+                background: #0a0a0a;
+                border: 1px solid #151515;
+                border-radius: 2px;
+                overflow: hidden;
+                position: relative;
+            }
+            .funnel-row .bar {
+                height: 100%;
+                background: linear-gradient(
+                    90deg,
+                    rgba(0, 229, 255, 0.25),
+                    var(--cyber-cyan)
+                );
+                min-width: 0;
+                transition: width 0.25s ease;
+            }
+            .funnel-row .nums {
+                font-size: 12px;
+                font-variant-numeric: tabular-nums;
+                color: #ccc;
+                white-space: nowrap;
+                min-width: 110px;
+                text-align: right;
+            }
+            .funnel-row .nums .drop {
+                color: #555;
+                margin-left: 6px;
+            }
+            .funnel-row .nums .drop.bad {
+                color: var(--cyber-orange);
+            }
+            .funnel-empty {
+                color: #444;
+                font-size: 13px;
+                padding: 20px 8px;
+                letter-spacing: 1px;
+            }
+            .funnel-summary {
+                margin-top: 12px;
+                font-size: 12px;
+                letter-spacing: 1px;
+                color: #666;
+            }
+            .funnel-summary b {
+                color: var(--cyber-magenta);
+                font-weight: 700;
+            }
+            @media (max-width: 640px) {
+                .funnel-row {
+                    grid-template-columns: 1fr;
+                    gap: 4px;
+                }
+                .funnel-row .step-lab {
+                    text-align: left;
+                }
+                .funnel-row .nums {
+                    text-align: left;
+                    min-width: 0;
+                }
+            }
             .split-2 {
                 display: grid;
                 grid-template-columns: 1fr 1fr;
@@ -993,6 +1206,32 @@
             <p class="hint">
                 consecutive pageviews inside a visit · from → to · thickness =
                 neurons who took the edge · answers "after X, where?"
+            </p>
+
+            <div class="section-label">funnel</div>
+            <div class="funnel-builder">
+                <div class="funnel-steps" id="funnel-steps"></div>
+                <div class="funnel-add-row">
+                    <input
+                        id="funnel-input"
+                        type="text"
+                        placeholder="/path or paste pathname"
+                        autocomplete="off"
+                        spellcheck="false"
+                    />
+                    <button type="button" class="primary" id="funnel-add">
+                        add step
+                    </button>
+                    <button type="button" id="funnel-clear">clear</button>
+                </div>
+                <div class="funnel-presets" id="funnel-presets"></div>
+                <div class="funnel-chart" id="funnel-chart"></div>
+                <div class="funnel-summary" id="funnel-summary"></div>
+            </div>
+            <p class="hint">
+                ordered path steps · neuron must hit each step later than the
+                previous (any visit, full window) · v1 = page paths only ·
+                convert/tx goals come next
             </p>
 
             <div class="section-label">top pages</div>
@@ -1940,6 +2179,189 @@
                     .join("");
             }
 
+            // ── funnel builder (v1: ordered page paths) ──────────────────
+            const FUNNEL_KEY = "lytics_funnel_steps";
+            const FUNNEL_DEFAULT = ["/", "/tokens", "/token/usd"];
+            let funnelSteps = loadFunnelSteps();
+            let funnelPathHints = [];
+
+            function loadFunnelSteps() {
+                try {
+                    const raw = localStorage.getItem(FUNNEL_KEY);
+                    if (!raw) return [...FUNNEL_DEFAULT];
+                    const arr = JSON.parse(raw);
+                    if (!Array.isArray(arr) || !arr.length)
+                        return [...FUNNEL_DEFAULT];
+                    return arr.map(normalizePath).filter(Boolean).slice(0, 12);
+                } catch (_) {
+                    return [...FUNNEL_DEFAULT];
+                }
+            }
+            function saveFunnelSteps() {
+                localStorage.setItem(FUNNEL_KEY, JSON.stringify(funnelSteps));
+            }
+            function normalizePath(p) {
+                if (p == null) return null;
+                let s = String(p).trim();
+                if (!s) return null;
+                // allow pasting full URL
+                try {
+                    if (s.startsWith("http://") || s.startsWith("https://")) {
+                        s = new URL(s).pathname;
+                    }
+                } catch (_) {}
+                if (!s.startsWith("/")) s = "/" + s;
+                // strip query/hash
+                s = s.split("?")[0].split("#")[0];
+                // collapse trailing slash except root
+                if (s.length > 1 && s.endsWith("/")) s = s.slice(0, -1);
+                return s;
+            }
+            function renderFunnelStepsUI() {
+                const el = document.getElementById("funnel-steps");
+                if (!funnelSteps.length) {
+                    el.innerHTML = `<span class="funnel-empty">add path steps →</span>`;
+                    return;
+                }
+                el.innerHTML = funnelSteps
+                    .map((s, i) => {
+                        const arrow =
+                            i < funnelSteps.length - 1
+                                ? `<span class="funnel-arrow">→</span>`
+                                : "";
+                        return `<span class="funnel-step-chip" title="${s}"><span class="ord">${i + 1}</span><span class="lab">${s}</span><button type="button" data-i="${i}" aria-label="remove">×</button></span>${arrow}`;
+                    })
+                    .join("");
+                el.querySelectorAll("button[data-i]").forEach((btn) => {
+                    btn.onclick = (e) => {
+                        e.stopPropagation();
+                        const i = Number(btn.dataset.i);
+                        funnelSteps.splice(i, 1);
+                        saveFunnelSteps();
+                        renderFunnelStepsUI();
+                        renderFunnelPresets();
+                        runFunnel();
+                    };
+                });
+            }
+            function renderFunnelPresets() {
+                const el = document.getElementById("funnel-presets");
+                const inSet = new Set(funnelSteps);
+                const hints = funnelPathHints.length
+                    ? funnelPathHints
+                    : ["/", "/tokens", "/doctrine", "/token/usd"];
+                el.innerHTML =
+                    `<span style="font-size:10px;letter-spacing:1px;color:#444;margin-right:4px">QUICK</span>` +
+                    hints
+                        .slice(0, 12)
+                        .map((p) => {
+                            const on = inSet.has(p);
+                            return `<button type="button" class="tag ${on ? "in" : ""}" data-p="${p}" ${on ? "disabled" : ""}>${p}</button>`;
+                        })
+                        .join("");
+                el.querySelectorAll("button.tag:not(.in)").forEach((btn) => {
+                    btn.onclick = () => addFunnelStep(btn.dataset.p);
+                });
+            }
+            function addFunnelStep(raw) {
+                const p = normalizePath(raw);
+                if (!p) return;
+                if (funnelSteps.includes(p)) return;
+                if (funnelSteps.length >= 12) return;
+                funnelSteps.push(p);
+                saveFunnelSteps();
+                renderFunnelStepsUI();
+                renderFunnelPresets();
+                runFunnel();
+            }
+            function initFunnelBuilder() {
+                const input = document.getElementById("funnel-input");
+                const add = document.getElementById("funnel-add");
+                const clear = document.getElementById("funnel-clear");
+                if (add.dataset.bound) return;
+                add.dataset.bound = "1";
+                add.onclick = () => {
+                    addFunnelStep(input.value);
+                    input.value = "";
+                    input.focus();
+                };
+                input.addEventListener("keydown", (e) => {
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        add.onclick();
+                    }
+                });
+                clear.onclick = () => {
+                    funnelSteps = [];
+                    saveFunnelSteps();
+                    renderFunnelStepsUI();
+                    renderFunnelPresets();
+                    document.getElementById("funnel-chart").innerHTML =
+                        `<div class="funnel-empty">— add steps to build a funnel</div>`;
+                    document.getElementById("funnel-summary").textContent = "";
+                };
+                renderFunnelStepsUI();
+                renderFunnelPresets();
+            }
+            function renderFunnelChart(rows) {
+                const el = document.getElementById("funnel-chart");
+                const sum = document.getElementById("funnel-summary");
+                if (!rows || !rows.length) {
+                    el.innerHTML = `<div class="funnel-empty">— no data for these steps</div>`;
+                    sum.textContent = "";
+                    return;
+                }
+                const maxN = Math.max(
+                    1,
+                    ...rows.map((r) => Number(r.neurons) || 0),
+                );
+                const base = Number(rows[0].neurons) || 0;
+                el.innerHTML = rows
+                    .map((r, i) => {
+                        const n = Number(r.neurons) || 0;
+                        const prev =
+                            i === 0 ? n : Number(rows[i - 1].neurons) || 0;
+                        const pctW = Math.round((n / maxN) * 100);
+                        let drop = "";
+                        if (i > 0) {
+                            const d =
+                                prev > 0 ? Math.round((1 - n / prev) * 100) : 0;
+                            drop = `<span class="drop ${d >= 50 ? "bad" : ""}">−${d}%</span>`;
+                        }
+                        const ofBase =
+                            base > 0 && i > 0
+                                ? ` · ${Math.round((n / base) * 100)}% of start`
+                                : "";
+                        return `<div class="funnel-row">
+              <div class="step-lab" title="${r.step || ""}">${i + 1}. ${shortPath(r.step)}</div>
+              <div class="bar-wrap"><div class="bar" style="width:${pctW}%"></div></div>
+              <div class="nums"><b>${n}</b> n${drop}${ofBase ? `<span class="drop">${ofBase}</span>` : ""}</div>
+            </div>`;
+                    })
+                    .join("");
+                const last = Number(rows[rows.length - 1].neurons) || 0;
+                const conv = base > 0 ? Math.round((last / base) * 100) : 0;
+                sum.innerHTML = `conversion <b>${conv}%</b> · ${base} → ${last} neurons · ${rows.length} steps`;
+            }
+            async function runFunnel() {
+                initFunnelBuilder();
+                if (!funnelSteps.length) {
+                    document.getElementById("funnel-chart").innerHTML =
+                        `<div class="funnel-empty">— add steps to build a funnel</div>`;
+                    document.getElementById("funnel-summary").textContent = "";
+                    return;
+                }
+                const stepsParam = funnelSteps
+                    .map(encodeURIComponent)
+                    .join(",");
+                try {
+                    const rows = await get("funnel", `?steps=${stepsParam}`);
+                    renderFunnelChart(Array.isArray(rows) ? rows : []);
+                } catch (_) {
+                    renderFunnelChart([]);
+                }
+            }
+
             async function refresh() {
                 renderChips();
                 const w = windowSpec();
@@ -2059,6 +2481,13 @@
 
                 // top pages — funnel + attention + scroll, first-segment rollup
                 const particles = await get("particles", "?limit=100");
+                // path hints for funnel quick-add (leaf paths only)
+                funnelPathHints = (Array.isArray(particles) ? particles : [])
+                    .map((p) => p.pathname)
+                    .filter(Boolean)
+                    .slice(0, 16);
+                renderFunnelPresets();
+                await runFunnel();
                 const particleFmt = (m) => {
                     const neurons = Number(m.neurons) || 0;
                     const visits = Number(m.visits) || 0;
