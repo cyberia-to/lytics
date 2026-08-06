@@ -54,6 +54,7 @@ pub async fn get_report(
         "chains" => chains(&app.cell, limit),
         "recent_signals" => recent_signals(&app.cell, limit),
         "networks" => networks(&app.cell, limit),
+        "size" => size_bytes(&app.cell),
         _ => return (StatusCode::NOT_FOUND, "unknown report").into_response(),
     };
     Json(out).into_response()
@@ -154,4 +155,39 @@ pub fn networks(cell: &Cybergraph, limit: usize) -> serde_json::Value {
     rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     rows.truncate(limit);
     json!(rows.into_iter().map(|(network, signals)| json!({"network": network, "signals": signals})).collect::<Vec<_>>())
+}
+
+/// estimated resident bytes for `Cybergraph.chains` — the "how big is this
+/// actually getting" number the dashboard was missing. `size_of_val` on
+/// each `Signal` gives its fixed "shell" size (its `Vec` fields are
+/// pointer+len+cap, 24 bytes each, regardless of contents) without needing
+/// to name `foculus::chain::Signal` or `zheng::Proof` in this file; the
+/// `links`/`delta_pi` `Vec`s' actual heap contents are added separately,
+/// per-element. same estimate caveat as `bbg_reports::size_bytes`: data
+/// payload only, `BTreeMap` node overhead and `Vec` capacity-vs-len slack
+/// are real and not included.
+pub fn size_bytes(cell: &Cybergraph) -> serde_json::Value {
+    const KEY: usize = 32; // NeuronId / step key contribution, rounded consistently with bbg_reports
+
+    let mut signal_shells = 0usize;
+    let mut cyberlinks = 0usize;
+    let mut delta_pi = 0usize;
+    for chain in cell.chains.values() {
+        for signal in chain.entries.values() {
+            signal_shells += 8 + std::mem::size_of_val(signal); // u64 step key + Signal shell
+            cyberlinks += signal.links.iter().map(std::mem::size_of_val).sum::<usize>();
+            delta_pi += signal.delta_pi.iter().map(std::mem::size_of_val).sum::<usize>();
+        }
+    }
+    let chain_keys = cell.chains.len() * KEY;
+    let total = signal_shells + cyberlinks + delta_pi + chain_keys;
+
+    json!({
+        "signal_shells": signal_shells,
+        "cyberlinks": cyberlinks,
+        "delta_pi": delta_pi,
+        "chain_keys": chain_keys,
+        "total": total,
+        "estimate": true,
+    })
 }

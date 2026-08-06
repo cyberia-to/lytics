@@ -737,6 +737,12 @@ pub fn overview(events: &[&Stored]) -> serde_json::Value {
             obj.insert(k.clone(), val.clone());
         }
     }
+    // scroll reach is a pure max-per-(neuron,path) rollup — same helper the
+    // cfg(test) oracle uses, so differential tests stay honest without
+    // teaching inf a percentile primitive.
+    if let Some(obj) = o.as_object_mut() {
+        obj.insert("scroll".into(), crate::reports::scroll_overview(events));
+    }
     o
 }
 
@@ -881,6 +887,7 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
             .then(a.0.cmp(&b.0))
     });
     rows.truncate(limit);
+    let scroll_by = crate::reports::scroll_reach_by_path(events);
     let out: Vec<_> = rows
         .into_iter()
         .map(|(path, neurons, visits, pv)| {
@@ -891,12 +898,17 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
                 .unwrap_or(0);
             let att_pv = att.checked_div(visits).unwrap_or(0);
             let att_pn = att.checked_div(neurons).unwrap_or(0);
+            let scroll =
+                crate::reports::scroll_stats(scroll_by.get(&path).cloned().unwrap_or_default());
             json!({
                 "pathname": path,
                 "neurons": neurons,
                 "visits": visits,
                 "views": pv,
                 "attention_ms": att,
+                "scroll_p50": scroll["p50"],
+                "scroll_p90": scroll["p90"],
+                "scroll_samples": scroll["samples"],
                 "views_per_visit_milli": vpv_milli,
                 "attention_ms_per_visit": att_pv,
                 "attention_ms_per_neuron": att_pn,

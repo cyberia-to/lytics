@@ -122,6 +122,16 @@
                 "querying" (see <code>/bbg</code> for what is).
             </p>
 
+            <div class="section-label">estimated size</div>
+            <div class="stat-grid" id="size-total"></div>
+            <div class="table-wrap" style="margin-top:12px"><table class="cyber-table" id="size-breakdown"></table></div>
+            <p class="hint">
+                <code>size_of_val</code> on every stored <code>Signal</code>
+                plus its actual <code>links</code>/<code>delta_pi</code>
+                heap contents — data payload only, <code>BTreeMap</code> node
+                overhead and <code>Vec</code> capacity slack not included.
+            </p>
+
             <div class="section-label">chains — most active</div>
             <div class="table-wrap"><table class="cyber-table" id="chains"></table></div>
 
@@ -182,6 +192,14 @@
                     .join("");
             }
 
+            function bytes(n) {
+                if (n == null) return "—";
+                if (n < 1024) return `${n} B`;
+                if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+                if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(2)} MB`;
+                return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+            }
+
             function valenceClass(v) {
                 if (v > 0) return "valence-pos";
                 if (v < 0) return "valence-neg";
@@ -197,6 +215,22 @@
                     ["total signals", o.total_signals, "committed headers"],
                     ["network labels", o.distinct_networks, "vestigial — see below"],
                 ]);
+
+                const sz = await get("size");
+                document.getElementById("size-total").innerHTML = cards([
+                    ["estimated total", bytes(sz.total), "data payload — see hint"],
+                ]);
+                table(
+                    document.getElementById("size-breakdown"),
+                    ["PART", "BYTES"],
+                    [
+                        { p: "signal shells", b: bytes(sz.signal_shells) },
+                        { p: "cyberlinks (links)", b: bytes(sz.cyberlinks) },
+                        { p: "delta_pi", b: bytes(sz.delta_pi) },
+                        { p: "chain keys", b: bytes(sz.chain_keys) },
+                    ],
+                    [["p", ""], ["b", "num"]],
+                );
 
                 const chains = await get("chains", "?limit=15");
                 table(

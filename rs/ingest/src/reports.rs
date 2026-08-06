@@ -21,7 +21,6 @@ use crate::enrich::{Attribution, Device};
 use lytics_event::Actor;
 use lytics_event::{EventBody, Kind, Navigation};
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
 use serde_json::json;
 use std::collections::BTreeMap;
 #[cfg(test)]
@@ -57,6 +56,96 @@ impl Stored {
     pub fn attention_ms(&self) -> u64 {
         self.body.attention.map(|a| a.ms).unwrap_or(0)
     }
+
+    /// peak scroll percent (0–100) carried on attention events; `None` if the
+    /// event is not an attention sample.
+    pub fn scroll_depth(&self) -> Option<u8> {
+        self.body.attention.as_ref().map(|a| a.scroll_depth)
+    }
+}
+
+/// max scroll reached per (neuron, pathname) from attention events — the unit
+/// of "how far did this reader get on this page". short pages that never
+/// fire attention contribute nothing (honest empty, not a fake 0).
+pub fn scroll_reach_samples(events: &[&Stored]) -> Vec<u8> {
+    let mut max_by: BTreeMap<(&str, &str), u8> = BTreeMap::new();
+    for e in events {
+        let Some(d) = e.scroll_depth() else {
+            continue;
+        };
+        let key = (e.body.neuron.as_str(), e.body.pathname.as_str());
+        max_by
+            .entry(key)
+            .and_modify(|m| {
+                if d > *m {
+                    *m = d;
+                }
+            })
+            .or_insert(d);
+    }
+    max_by.into_values().collect()
+}
+
+/// per-pathname max-scroll samples (one value per neuron that looked).
+pub fn scroll_reach_by_path(events: &[&Stored]) -> BTreeMap<String, Vec<u8>> {
+    let mut max_by: BTreeMap<(&str, &str), u8> = BTreeMap::new();
+    for e in events {
+        let Some(d) = e.scroll_depth() else {
+            continue;
+        };
+        let key = (e.body.neuron.as_str(), e.body.pathname.as_str());
+        max_by
+            .entry(key)
+            .and_modify(|m| {
+                if d > *m {
+                    *m = d;
+                }
+            })
+            .or_insert(d);
+    }
+    let mut by_path: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for ((_, path), d) in max_by {
+        by_path.entry(path.to_string()).or_default().push(d);
+    }
+    by_path
+}
+
+fn percentile_u8(sorted: &[u8], p: f64) -> u64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let i = ((sorted.len() as f64 - 1.0) * p).round() as usize;
+    sorted[i.min(sorted.len() - 1)] as u64
+}
+
+/// p50 / p90 / sample count / fixed depth buckets for a set of scroll samples.
+pub fn scroll_stats(mut samples: Vec<u8>) -> serde_json::Value {
+    samples.sort_unstable();
+    let n = samples.len() as u64;
+    let buckets = [
+        ("0–24", 0u8, 24u8),
+        ("25–49", 25, 49),
+        ("50–74", 50, 74),
+        ("75–100", 75, 100),
+    ]
+    .iter()
+    .map(|(label, lo, hi)| {
+        let count = samples.iter().filter(|&&v| v >= *lo && v <= *hi).count() as u64;
+        json!({"label": *label, "min": lo, "max": hi, "neurons": count})
+    })
+    .collect::<Vec<_>>();
+    json!({
+        "samples": n,
+        "p50": percentile_u8(&samples, 0.5),
+        "p90": percentile_u8(&samples, 0.9),
+        "max": samples.last().copied().unwrap_or(0) as u64,
+        "buckets": buckets,
+    })
+}
+
+/// overview-shaped scroll block: stats over max-reach samples.
+pub fn scroll_overview(events: &[&Stored]) -> serde_json::Value {
+    scroll_stats(scroll_reach_samples(events))
 }
 
 pub fn in_window(events: &[Stored], from: u64, to: u64) -> Vec<&Stored> {
@@ -209,7 +298,7 @@ pub fn overview(events: &[&Stored]) -> serde_json::Value {
     } else {
         0
     };
-    json!({
+    let mut o = json!({
         "neurons": neurons,
         "views": views,
         "visits": visits,
@@ -218,7 +307,11 @@ pub fn overview(events: &[&Stored]) -> serde_json::Value {
         "views_per_visit_milli": views_per_visit_milli,
         "attention_ms_per_visit": attention_ms_per_visit,
         "attention_ms_per_neuron": attention_ms_per_neuron,
-    })
+    });
+    if let Some(obj) = o.as_object_mut() {
+        obj.insert("scroll".into(), scroll_overview(events));
+    }
+    o
 }
 
 /// bucket ms: "hour" or "day".
@@ -321,6 +414,7 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
             .then(a.0.cmp(&b.0))
     });
     rows.truncate(limit);
+    let scroll_by = scroll_reach_by_path(events);
     let out: Vec<_> = rows
         .into_iter()
         .map(|(path, neurons, visits, pv)| {
@@ -331,6 +425,7 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
                 .unwrap_or(0);
             let att_pv = att.checked_div(visits).unwrap_or(0);
             let att_pn = att.checked_div(neurons).unwrap_or(0);
+            let scroll = scroll_stats(scroll_by.get(&path).cloned().unwrap_or_default());
             json!({
                 "pathname": path,
                 "neurons": neurons,
@@ -340,6 +435,9 @@ pub fn particles(events: &[&Stored], limit: usize) -> serde_json::Value {
                 "views_per_visit_milli": vpv,
                 "attention_ms_per_visit": att_pv,
                 "attention_ms_per_neuron": att_pn,
+                "scroll_p50": scroll["p50"],
+                "scroll_p90": scroll["p90"],
+                "scroll_samples": scroll["samples"],
             })
         })
         .collect();
@@ -784,6 +882,42 @@ mod tests {
             content: None,
         });
         assert!(e.is_arrival());
+    }
+
+    #[test]
+    fn scroll_stats_use_max_reach_per_neuron_path() {
+        // n1 looks at /a twice — max 80 wins; n2 reaches 20 on /a
+        let mut a1 = ev("n1", "/a", 1000, Some(Navigation::External), 5000);
+        a1.body.kind = Kind::Attention;
+        a1.body.attention = Some(lytics_event::Attention {
+            ms: 5000,
+            scroll_depth: 40,
+        });
+        let mut a2 = ev("n1", "/a", 2000, Some(Navigation::Internal), 3000);
+        a2.body.kind = Kind::Attention;
+        a2.body.attention = Some(lytics_event::Attention {
+            ms: 3000,
+            scroll_depth: 80,
+        });
+        let mut a3 = ev("n2", "/a", 3000, Some(Navigation::External), 2000);
+        a3.body.kind = Kind::Attention;
+        a3.body.attention = Some(lytics_event::Attention {
+            ms: 2000,
+            scroll_depth: 20,
+        });
+        let events = [a1, a2, a3];
+        let r: Vec<&Stored> = events.iter().collect();
+        let samples = scroll_reach_samples(&r);
+        assert_eq!(samples.len(), 2); // two (neuron, path) pairs
+        let mut s = samples;
+        s.sort_unstable();
+        assert_eq!(s, vec![20, 80]);
+        let stats = scroll_stats(s);
+        assert_eq!(stats["samples"], 2);
+        assert_eq!(stats["max"], 80);
+        let p50 = stats["p50"].as_u64().unwrap();
+        assert!(p50 == 20 || p50 == 80);
+        assert_eq!(stats["p90"], 80);
     }
 
     #[test]

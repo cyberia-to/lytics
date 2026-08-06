@@ -57,6 +57,7 @@ pub async fn get_report(
         "signals" => signals(bbg_state, limit),
         "balances" => balances(bbg_state, limit),
         "other_dims" => other_dims(bbg_state),
+        "size" => size_bytes(bbg_state),
         _ => return (StatusCode::NOT_FOUND, "unknown report").into_response(),
     };
     Json(out).into_response()
@@ -270,6 +271,66 @@ pub fn other_dims(state: &bbg::state::BbgState) -> serde_json::Value {
         "coins": rows("coins", &["denom", "total_supply"]),
         "cards": rows("cards", &["card", "owner", "particle"]),
         "files": rows("files", &["particle", "available", "chunk_count"]),
+    })
+}
+
+/// estimated resident bytes per dimension — the "how big is this actually
+/// getting" number the dashboard was missing. `key_bytes + size_of::<Record>()`
+/// per entry, summed; `axons_out`/`axons_in` add the real length of each
+/// particle's adjacency `Vec` (not just one key). this is a data-payload
+/// estimate, not a true allocator accounting — `BTreeMap`/`BTreeSet` node
+/// overhead (unfilled B-tree nodes, `Vec` slack from `.capacity()` vs
+/// `.len()`) is real and not included, and `commitments`' `Goldilocks` size
+/// is a documented constant (8 bytes: a field element mod a ~64-bit prime),
+/// not introspected — pulling `nebu` into lytics-ingest just to call
+/// `size_of` on one field wasn't worth the dependency. labeled as an
+/// estimate in the response, not presented as exact.
+pub fn size_bytes(state: &bbg::state::BbgState) -> serde_json::Value {
+    use bbg::types::{CardRecord, CoinRecord, FileRecord, IntentRecord, LocationRecord, NeuronRecord, ParticleRecord, SignalRecord};
+    use std::mem::size_of;
+
+    const KEY: usize = 32; // Particle / NeuronId — [u8; 32]
+    const GOLDILOCKS_ESTIMATE: usize = 8; // documented constant — see doc comment above
+
+    let particles = state.particles.len() * (KEY + size_of::<ParticleRecord>());
+    let axons_out: usize = state.axons_out.values().map(|v| KEY + v.len() * KEY).sum();
+    let axons_in: usize = state.axons_in.values().map(|v| KEY + v.len() * KEY).sum();
+    let neurons = state.neurons.len() * (KEY + size_of::<NeuronRecord>());
+    let locations = state.locations.len() * (KEY + size_of::<LocationRecord>());
+    let coins = state.coins.len() * (KEY + size_of::<CoinRecord>());
+    let cards = state.cards.len() * (KEY + size_of::<CardRecord>());
+    let files = state.files.len() * (KEY + size_of::<FileRecord>());
+    let time = state.time.len() * (8 + KEY); // u64 height key
+    let signals = state.signals.len() * (8 + size_of::<SignalRecord>()); // u64 step key
+    let commitments = state.commitments.len() * (KEY + GOLDILOCKS_ESTIMATE);
+    let nullifiers = state.nullifiers.len() * KEY;
+    let balances = state.balances.len() * (KEY + size_of::<u64>());
+    let intents = state.intents.len() * (KEY + size_of::<IntentRecord>());
+    let axon_edges = state.axon_edges.len() * (KEY + 2 * KEY); // (Particle, Particle)
+
+    let total = particles
+        + axons_out
+        + axons_in
+        + neurons
+        + locations
+        + coins
+        + cards
+        + files
+        + time
+        + signals
+        + commitments
+        + nullifiers
+        + balances
+        + intents
+        + axon_edges;
+
+    json!({
+        "particles": particles, "axons_out": axons_out, "axons_in": axons_in,
+        "neurons": neurons, "locations": locations, "coins": coins, "cards": cards,
+        "files": files, "time": time, "signals": signals, "commitments": commitments,
+        "nullifiers": nullifiers, "balances": balances, "intents": intents,
+        "axon_edges": axon_edges, "total": total,
+        "estimate": true,
     })
 }
 

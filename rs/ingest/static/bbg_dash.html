@@ -192,6 +192,17 @@
                 path mints a neuron record, or writes a location/coin/card/file.
             </p>
 
+            <div class="section-label">estimated size</div>
+            <div class="stat-grid" id="size-total"></div>
+            <div class="table-wrap" style="margin-top:12px"><table class="cyber-table" id="size-breakdown"></table></div>
+            <p class="hint">
+                data payload only — <code>key_bytes + size_of::&lt;Record&gt;()</code>
+                per entry, summed. <code>BTreeMap</code>/<code>BTreeSet</code> node
+                overhead and unfilled capacity are real and not included, so this
+                is a floor, not the true resident size. no dimension here holds
+                actual content bytes yet — see the hint below <code>files</code>.
+            </p>
+
             <div class="section-label">particles — top by energy</div>
             <div class="table-wrap"><table class="cyber-table" id="particles"></table></div>
             <p class="hint">
@@ -244,6 +255,18 @@
                     <div class="table-wrap"><table class="cyber-table" id="cards-files"></table></div>
                 </div>
             </div>
+            <p class="hint">
+                <code>files</code> is where content bytes would attach to a
+                particle by spec — but `FileRecord` (<code>{available,
+                chunk_count}</code>) is never constructed anywhere in cyber
+                today: no code path writes a row here, so it stays permanently
+                empty, not by choice but because the write side was never
+                built. the real byte-storage primitives already exist,
+                sharing bbg's own hemera hash — <code>radio/cyber-bao</code>
+                (Poseidon2-BAO verified streaming, 4096-byte chunks) and
+                <code>radio/iroh-blobs</code> (a working content-addressed
+                blob store) — just not wired to this dimension yet.
+            </p>
 
             <div class="footer">
                 🏴 a <a href="https://cyberia.to">cyberia</a> project ·
@@ -277,6 +300,14 @@
                     `</tbody>`;
             }
 
+            function bytes(n) {
+                if (n == null) return "—";
+                if (n < 1024) return `${n} B`;
+                if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+                if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(2)} MB`;
+                return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+            }
+
             function cards(items) {
                 return items
                     .map(
@@ -308,6 +339,29 @@
                     ["nullifiers", o.nullifiers, "privacy dim"],
                     ["intents", o.intents, "uncommitted"],
                 ]);
+
+                const sz = await get("size");
+                document.getElementById("size-total").innerHTML = cards([
+                    ["estimated total", bytes(sz.total), "data payload — see hint"],
+                ]);
+                table(
+                    document.getElementById("size-breakdown"),
+                    ["DIMENSION", "BYTES"],
+                    [
+                        { d: "particles", b: bytes(sz.particles) },
+                        { d: "axons_out", b: bytes(sz.axons_out) },
+                        { d: "axons_in", b: bytes(sz.axons_in) },
+                        { d: "neurons", b: bytes(sz.neurons) },
+                        { d: "signals", b: bytes(sz.signals) },
+                        { d: "balances", b: bytes(sz.balances) },
+                        { d: "commitments", b: bytes(sz.commitments) },
+                        { d: "nullifiers", b: bytes(sz.nullifiers) },
+                        { d: "intents", b: bytes(sz.intents) },
+                        { d: "axon_edges", b: bytes(sz.axon_edges) },
+                        { d: "locations / coins / cards / files", b: bytes(sz.locations + sz.coins + sz.cards + sz.files) },
+                    ],
+                    [["d", ""], ["b", "num"]],
+                );
 
                 const particles = await get("particles", "?limit=20");
                 table(

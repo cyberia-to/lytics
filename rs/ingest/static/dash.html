@@ -887,10 +887,16 @@
             <div class="section-label">overview</div>
             <div class="stat-grid" id="ov"></div>
             <div class="stat-grid" id="ov-aud" style="margin-top: 12px"></div>
+            <div class="freq-panel" style="margin-top: 12px">
+                <div class="stat-label">scroll reach</div>
+                <div class="freq-kpis" id="scroll-kpis"></div>
+                <div id="scroll-hist"></div>
+            </div>
             <p class="hint">
                 core: neurons → visits → views · derivatives: depth =
                 views/visit · dwell = attention/visit · att/neuron = total
-                looking per unique key · NEW = first-seen in window · RETURNING
+                looking per unique key · scroll = max % reached per neuron×page
+                (from attention sensor) · NEW = first-seen in window · RETURNING
                 = seen before window
             </p>
 
@@ -1848,6 +1854,33 @@
                     .join("");
             }
 
+            function renderScrollHist(scroll) {
+                const kpis = document.getElementById("scroll-kpis");
+                const el = document.getElementById("scroll-hist");
+                if (!scroll || !scroll.buckets) {
+                    kpis.innerHTML = "";
+                    el.innerHTML = `<div class="live-empty">— no scroll samples yet</div>`;
+                    return;
+                }
+                kpis.innerHTML = `p50 <b>${scroll.p50 ?? 0}%</b> · p90 <b>${scroll.p90 ?? 0}%</b> · max <b>${scroll.max ?? 0}%</b> · <b>${scroll.samples ?? 0}</b> reaches`;
+                const buckets = scroll.buckets || [];
+                const maxN = Math.max(
+                    1,
+                    ...buckets.map((b) => Number(b.neurons) || 0),
+                );
+                el.innerHTML = buckets
+                    .map((b) => {
+                        const n = Number(b.neurons) || 0;
+                        const pct = Math.round((n / maxN) * 100);
+                        return `<div class="freq-row">
+              <div class="lab">${b.label}</div>
+              <div class="bar-track"><div class="bar" style="width:${pct}%; background: linear-gradient(90deg, rgba(255,102,0,0.35), var(--cyber-orange))"></div></div>
+              <div class="n">${n}</div>
+            </div>`;
+                    })
+                    .join("");
+            }
+
             function renderFrequency(data) {
                 renderFreqHist(
                     document.getElementById("freq-visits"),
@@ -1950,6 +1983,9 @@
                           ? "first-seen in window"
                           : "seen before window";
 
+                const scr = o.scroll || {};
+                const scrP50 = scr.p50 != null ? `${scr.p50}%` : "—";
+                const scrP90 = scr.p90 != null ? `${scr.p90}%` : "—";
                 document.getElementById("ov").innerHTML = cards([
                     ["NEURONS", o.neurons, who, ""],
                     ["VISITS", o.visits, "entries · no timeout", "yellow"],
@@ -1958,8 +1994,21 @@
                     ["DWELL", dwell, "attention / visit", "magenta"],
                     ["ATTENTION", fmt(o.attention_ms), "total looking", "cyan"],
                     ["ATT / NEURON", attN, "looking per unique key", "magenta"],
+                    [
+                        "SCROLL p50",
+                        scrP50,
+                        `${scr.samples ?? 0} page reaches`,
+                        "orange",
+                    ],
+                    [
+                        "SCROLL p90",
+                        scrP90,
+                        `max ${scr.max != null ? scr.max + "%" : "—"}`,
+                        "magenta",
+                    ],
                 ]);
                 renderAudienceSplit(o);
+                renderScrollHist(scr);
 
                 // frequency — whale vs long tail
                 try {
@@ -2008,7 +2057,7 @@
                     (m) => passFmt(m),
                 );
 
-                // top pages — funnel + attention, first-segment rollup
+                // top pages — funnel + attention + scroll, first-segment rollup
                 const particles = await get("particles", "?limit=100");
                 const particleFmt = (m) => {
                     const neurons = Number(m.neurons) || 0;
@@ -2020,6 +2069,10 @@
                         visits > 0 ? Math.round((views / visits) * 1000) : 0;
                     const dwell = visits > 0 ? att / visits : 0;
                     const attN = neurons > 0 ? att / neurons : 0;
+                    const sp50 =
+                        m.scroll_p50 != null && m.scroll_samples
+                            ? `${m.scroll_p50}%`
+                            : "—";
                     return [
                         neurons || "—",
                         visits || "—",
@@ -2027,9 +2080,12 @@
                         fmtDepth(depthMilli),
                         fmt(dwell),
                         fmt(attN),
+                        sp50,
                         fmt(att),
                     ];
                 };
+                // for segment groups: recompute scroll p50 from children is hard
+                // without raw samples — show "—" on folder rows (no scroll_p50)
                 renderPathTable(
                     document.getElementById("particles"),
                     "particles",
@@ -2041,6 +2097,7 @@
                         "DEPTH",
                         "DWELL",
                         "ATT/N",
+                        "SCROLL",
                         "ATTENTION",
                     ],
                     groupByPathSegment(particles, [
@@ -2049,7 +2106,26 @@
                         "views",
                         "attention_ms",
                     ]),
-                    (m) => particleFmt(m),
+                    (m, _isGroup, g) => {
+                        // leaf path group: metrics summed from one row — pull
+                        // scroll off the original leaf (not additive).
+                        if (g && g.leaf) {
+                            return particleFmt({
+                                ...m,
+                                scroll_p50: g.leaf.scroll_p50,
+                                scroll_samples: g.leaf.scroll_samples,
+                            });
+                        }
+                        // folder with children: scroll not rollable here
+                        if (g && g.children && g.children.length) {
+                            return particleFmt({
+                                ...m,
+                                scroll_p50: null,
+                                scroll_samples: 0,
+                            });
+                        }
+                        return particleFmt(m);
+                    },
                 );
 
                 // geo + devices — funnel: neurons / visits / views
