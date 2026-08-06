@@ -442,6 +442,221 @@
                 letter-spacing: 1px;
                 text-align: center;
             }
+
+            /* live strip */
+            .live-head {
+                display: flex;
+                align-items: baseline;
+                justify-content: space-between;
+                gap: 12px;
+                flex-wrap: wrap;
+                margin-bottom: 10px;
+            }
+            .live-pulse-dot {
+                display: inline-block;
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                background: var(--cyber-red);
+                box-shadow: 0 0 10px var(--cyber-red);
+                margin-right: 8px;
+                animation: live-blink 1.4s ease-in-out infinite;
+            }
+            @keyframes live-blink {
+                0%,
+                100% {
+                    opacity: 1;
+                }
+                50% {
+                    opacity: 0.35;
+                }
+            }
+            .live-stats {
+                font-size: 12px;
+                letter-spacing: 1px;
+                color: #666;
+            }
+            .live-stats b {
+                color: var(--cyber-green);
+                font-weight: 700;
+            }
+            .live-strip {
+                display: flex;
+                gap: 8px;
+                overflow-x: auto;
+                padding-bottom: 4px;
+                min-height: 72px;
+            }
+            .live-card {
+                flex: 0 0 auto;
+                min-width: 160px;
+                max-width: 220px;
+                background: #050505;
+                border: 1px solid #1a1a1a;
+                border-radius: 2px;
+                padding: 10px 12px;
+            }
+            .live-card .ago {
+                font-size: 10px;
+                letter-spacing: 1px;
+                color: var(--cyber-red);
+                margin-bottom: 4px;
+            }
+            .live-card .path {
+                font-size: 13px;
+                color: #eee;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                margin-bottom: 4px;
+            }
+            .live-card .meta {
+                font-size: 11px;
+                color: #555;
+                letter-spacing: 0.5px;
+            }
+            .live-empty {
+                color: #444;
+                font-size: 13px;
+                padding: 20px 8px;
+                letter-spacing: 1px;
+            }
+
+            /* frequency histogram */
+            .freq-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 16px;
+            }
+            @media (max-width: 800px) {
+                .freq-grid {
+                    grid-template-columns: 1fr;
+                }
+            }
+            .freq-panel {
+                border: 1px solid #111;
+                border-radius: 2px;
+                background: #050505;
+                padding: 12px 14px;
+            }
+            .freq-panel .stat-label {
+                margin-bottom: 10px;
+            }
+            .freq-kpis {
+                display: flex;
+                gap: 14px;
+                flex-wrap: wrap;
+                margin-bottom: 12px;
+                font-size: 11px;
+                letter-spacing: 1px;
+                color: #555;
+            }
+            .freq-kpis b {
+                color: var(--cyber-cyan);
+                font-weight: 700;
+            }
+            .freq-row {
+                display: grid;
+                grid-template-columns: 48px 1fr 36px;
+                gap: 8px;
+                align-items: center;
+                margin-bottom: 6px;
+            }
+            .freq-row .lab {
+                font-size: 11px;
+                color: #888;
+                font-variant-numeric: tabular-nums;
+            }
+            .freq-row .bar-track {
+                height: 12px;
+                background: #0a0a0a;
+                border: 1px solid #151515;
+                border-radius: 1px;
+                overflow: hidden;
+            }
+            .freq-row .bar {
+                height: 100%;
+                background: linear-gradient(
+                    90deg,
+                    rgba(0, 255, 65, 0.35),
+                    var(--cyber-green)
+                );
+                min-width: 0;
+            }
+            .freq-row .n {
+                font-size: 11px;
+                color: #aaa;
+                text-align: right;
+                font-variant-numeric: tabular-nums;
+            }
+
+            /* path flow */
+            .flow-list {
+                border: 1px solid #111;
+                border-radius: 2px;
+                background: #050505;
+                overflow: hidden;
+            }
+            .flow-row {
+                display: grid;
+                grid-template-columns: 1fr auto 1fr auto;
+                gap: 10px;
+                align-items: center;
+                padding: 10px 14px;
+                border-bottom: 1px solid #111;
+            }
+            .flow-row:last-child {
+                border-bottom: none;
+            }
+            .flow-row:hover {
+                background: #080808;
+            }
+            .flow-from,
+            .flow-to {
+                font-size: 13px;
+                color: #ccc;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .flow-from {
+                text-align: right;
+                color: var(--cyber-cyan);
+            }
+            .flow-to {
+                color: var(--cyber-green);
+            }
+            .flow-arrow {
+                color: #444;
+                font-size: 12px;
+                letter-spacing: 1px;
+            }
+            .flow-meta {
+                font-size: 11px;
+                color: #666;
+                font-variant-numeric: tabular-nums;
+                white-space: nowrap;
+            }
+            .flow-bar {
+                grid-column: 1 / -1;
+                height: 3px;
+                background: #111;
+                border-radius: 1px;
+                overflow: hidden;
+                margin-top: -4px;
+            }
+            .flow-bar > i {
+                display: block;
+                height: 100%;
+                background: var(--cyber-magenta);
+                opacity: 0.7;
+            }
+            .flow-empty {
+                color: #444;
+                font-size: 13px;
+                padding: 24px;
+                letter-spacing: 1px;
+            }
             .split-2 {
                 display: grid;
                 grid-template-columns: 1fr 1fr;
@@ -658,6 +873,17 @@
             <div class="window-chips" id="aud-chips"></div>
             <div class="meta-line" id="meta">loading window…</div>
 
+            <div class="section-label">
+                <span class="live-pulse-dot" aria-hidden="true"></span>live
+            </div>
+            <div class="live-head">
+                <div class="live-stats" id="live-stats">loading…</div>
+            </div>
+            <div class="live-strip" id="live"></div>
+            <p class="hint">
+                last 15 minutes · wall-clock presence · refreshes with the dash
+            </p>
+
             <div class="section-label">overview</div>
             <div class="stat-grid" id="ov"></div>
             <div class="stat-grid" id="ov-aud" style="margin-top: 12px"></div>
@@ -666,6 +892,27 @@
                 views/visit · dwell = attention/visit · att/neuron = total
                 looking per unique key · NEW = first-seen in window · RETURNING
                 = seen before window
+            </p>
+
+            <div class="section-label">frequency</div>
+            <div class="freq-grid">
+                <div class="freq-panel">
+                    <div class="stat-label">visits per neuron</div>
+                    <div class="freq-kpis" id="freq-visits-kpis"></div>
+                    <div id="freq-visits"></div>
+                </div>
+                <div class="freq-panel">
+                    <div class="stat-label">days active per neuron</div>
+                    <div class="freq-kpis" id="freq-days-kpis"></div>
+                    <div id="freq-days"></div>
+                </div>
+            </div>
+            <div class="table-wrap" style="margin-top: 12px">
+                <table class="cyber-table" id="freq-top"></table>
+            </div>
+            <p class="hint">
+                shape of engagement · flat left = healthy long tail · spike on
+                32+ = whales / bots · top list is heaviest keys (truncated)
             </p>
 
             <div class="section-label">retention</div>
@@ -733,6 +980,13 @@
             <p class="hint">
                 neurons = unique visitors who entered / left here · visits =
                 passage count · grouped by first path segment (click to expand)
+            </p>
+
+            <div class="section-label">path flow</div>
+            <div class="flow-list" id="pathflow"></div>
+            <p class="hint">
+                consecutive pageviews inside a visit · from → to · thickness =
+                neurons who took the edge · answers "after X, where?"
             </p>
 
             <div class="section-label">top pages</div>
@@ -1536,10 +1790,139 @@
                 });
             }
 
+            function fmtAgo(ms) {
+                if (ms == null) return "—";
+                if (ms < 1000) return "now";
+                if (ms < 60000) return `${Math.round(ms / 1000)}s ago`;
+                if (ms < 3600000) return `${Math.round(ms / 60000)}m ago`;
+                return `${(ms / 3600000).toFixed(1)}h ago`;
+            }
+
+            function renderLive(data) {
+                const stats = document.getElementById("live-stats");
+                const el = document.getElementById("live");
+                const active = data.active ?? 0;
+                const views = data.views ?? 0;
+                const att = data.attention_ms ?? 0;
+                stats.innerHTML = `<b>${active}</b> active · <b>${views}</b> views · <b>${fmt(att)}</b> attention · last 15m`;
+                const rows = data.neurons || [];
+                if (!rows.length) {
+                    el.innerHTML = `<div class="live-empty">— nobody in the last 15 minutes</div>`;
+                    return;
+                }
+                el.innerHTML = rows
+                    .slice(0, 24)
+                    .map((r) => {
+                        const path = shortPath(r.path || "—");
+                        return `<div class="live-card" title="${r.neuron || ""}">
+              <div class="ago">${fmtAgo(r.ago_ms)}</div>
+              <div class="path">${path}</div>
+              <div class="meta">${r.country || "—"} · ${r.views || 0}v · ${fmt(r.attention_ms)}</div>
+            </div>`;
+                    })
+                    .join("");
+            }
+
+            function renderFreqHist(el, kpisEl, block) {
+                if (!block || !block.buckets) {
+                    el.innerHTML = `<div class="live-empty">—</div>`;
+                    kpisEl.innerHTML = "";
+                    return;
+                }
+                kpisEl.innerHTML = `median <b>${block.median ?? 0}</b> · p90 <b>${block.p90 ?? 0}</b> · max <b>${block.max ?? 0}</b>`;
+                const buckets = block.buckets || [];
+                const maxN = Math.max(
+                    1,
+                    ...buckets.map((b) => Number(b.neurons) || 0),
+                );
+                el.innerHTML = buckets
+                    .map((b) => {
+                        const n = Number(b.neurons) || 0;
+                        const pct = Math.round((n / maxN) * 100);
+                        return `<div class="freq-row">
+              <div class="lab">${b.label}</div>
+              <div class="bar-track"><div class="bar" style="width:${pct}%"></div></div>
+              <div class="n">${n}</div>
+            </div>`;
+                    })
+                    .join("");
+            }
+
+            function renderFrequency(data) {
+                renderFreqHist(
+                    document.getElementById("freq-visits"),
+                    document.getElementById("freq-visits-kpis"),
+                    data.visits,
+                );
+                renderFreqHist(
+                    document.getElementById("freq-days"),
+                    document.getElementById("freq-days-kpis"),
+                    data.days,
+                );
+                table(
+                    document.getElementById("freq-top"),
+                    ["NEURON", "VISITS", "DAYS", "VIEWS", "ATTENTION"],
+                    (data.top || []).map((r) => ({
+                        neuron: r.neuron,
+                        visits: r.visits,
+                        days: r.days,
+                        views: r.views,
+                        att: fmt(r.attention_ms),
+                    })),
+                    [
+                        ["neuron", ""],
+                        ["visits", "num"],
+                        ["days", "num"],
+                        ["views", "num"],
+                        ["att", "num"],
+                    ],
+                );
+            }
+
+            function renderPathflow(data) {
+                const el = document.getElementById("pathflow");
+                const edges = data.edges || [];
+                if (!edges.length) {
+                    el.innerHTML = `<div class="flow-empty">— no multi-page visits in window</div>`;
+                    return;
+                }
+                const maxN = Math.max(
+                    1,
+                    ...edges.map((e) => Number(e.neurons) || 0),
+                );
+                el.innerHTML = edges
+                    .slice(0, 25)
+                    .map((e) => {
+                        const n = Number(e.neurons) || 0;
+                        const t = Number(e.transitions) || 0;
+                        const pct = Math.max(4, Math.round((n / maxN) * 100));
+                        return `<div class="flow-row">
+              <div class="flow-from" title="${e.from || ""}">${shortPath(e.from)}</div>
+              <div class="flow-arrow">→</div>
+              <div class="flow-to" title="${e.to || ""}">${shortPath(e.to)}</div>
+              <div class="flow-meta">${n}n · ${t}×</div>
+              <div class="flow-bar"><i style="width:${pct}%"></i></div>
+            </div>`;
+                    })
+                    .join("");
+            }
+
             async function refresh() {
                 renderChips();
                 const w = windowSpec();
                 const aud = audienceSpec();
+
+                // live first — wall-clock, cheap, feels alive
+                try {
+                    const live = await get(
+                        "live",
+                        `?horizon_ms=${15 * 60 * 1000}`,
+                    );
+                    renderLive(live);
+                } catch (_) {
+                    renderLive({ active: 0, neurons: [] });
+                }
+
                 const o = await get("overview");
                 const from = o.from ?? Date.now() - w.ms;
                 const to = o.to ?? Date.now();
@@ -1578,6 +1961,13 @@
                 ]);
                 renderAudienceSplit(o);
 
+                // frequency — whale vs long tail
+                try {
+                    renderFrequency(await get("frequency"));
+                } catch (_) {
+                    renderFrequency({});
+                }
+
                 // retention — full history matrix + returns in current window
                 await renderRetention(w);
 
@@ -1587,6 +1977,12 @@
 
                 // landings / exits — grouped by first path segment
                 const pass = await get("passages", "?limit=100");
+                // path flow — consecutive edges inside visits
+                try {
+                    renderPathflow(await get("pathflow", "?limit=30"));
+                } catch (_) {
+                    renderPathflow({ edges: [] });
+                }
                 const passFmt = (m) => [
                     m.neurons ?? "—",
                     m.passages ?? m.visits ?? "—",

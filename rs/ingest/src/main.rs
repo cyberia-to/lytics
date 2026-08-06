@@ -12,6 +12,7 @@ mod enrich;
 mod geo;
 mod graph;
 mod inf_reports;
+mod juice;
 mod reports;
 mod store;
 
@@ -393,6 +394,19 @@ async fn get_report(
             "devices" => inf_reports::devices(&windowed, limit),
             "countries" => inf_reports::countries(&windowed, limit),
             "passages" => inf_reports::passages_report(&windowed, limit),
+            "frequency" => juice::frequency(&windowed),
+            "pathflow" => juice::pathflow(&windowed, limit.max(20)),
+            "live" => {
+                // wall-clock presence — last N minutes of the full log, not
+                // the dashboard window. audience cut still applied relative
+                // to the live horizon so NEW/RETURNING stay meaningful.
+                let horizon = parse_u64("horizon_ms", 15 * 60 * 1000);
+                let live_from = now.saturating_sub(horizon);
+                let live_all = reports::in_window(&app.events, live_from, now + 1);
+                let live_fs = reports::first_seen(&app.events);
+                let live_ev = reports::filter_audience(&live_all, &live_fs, live_from, audience);
+                juice::live(&live_ev, now, horizon)
+            }
             "retention" => inf_reports::retention(&app.events, parse_u64("weeks", 8) as usize),
             "returns" => inf_reports::returns(
                 &app.events,
