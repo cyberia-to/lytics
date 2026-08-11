@@ -629,6 +629,7 @@ dependencies = [
  "clap",
  "cyb-nebu",
  "cyber-hemera",
+ "cyber-lens",
  "rand",
  "serde",
  "serde_json",
