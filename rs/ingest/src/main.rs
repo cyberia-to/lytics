@@ -23,6 +23,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Json};
 use axum::routing::{delete, get, post};
+use tower_http::cors::CorsLayer;
 use cybergraph::Cybergraph;
 use lytics_event::{Event, event_hash, pow_verify, sig_verify, target_from_difficulty};
 use reports::Stored;
@@ -542,7 +543,12 @@ async fn main() {
         .route("/api/report/{name}", get(get_report))
         .route("/api/bbg/report/{name}", get(bbg_reports::get_report))
         .route("/api/cybergraph/report/{name}", get(cybergraph_reports::get_report))
-        .with_state(shared);
+        .with_state(shared)
+        // the tracker now ships on cyb.ai/soft3.org/cyber.page, all posting
+        // cross-origin to one shared backend — permissive is fine here: no
+        // cookies/credentials cross this boundary, every event is already
+        // signature- and PoW-authenticated at the application layer.
+        .layer(CorsLayer::permissive());
 
     let addr = format!("0.0.0.0:{port}");
     eprintln!("lytics ingest on http://{addr}");

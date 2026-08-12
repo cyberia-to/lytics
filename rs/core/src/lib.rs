@@ -29,12 +29,18 @@ static ALLOC: lol_alloc::AssumeSingleThreaded<lol_alloc::FreeListAllocator> =
 // as RuntimeError in the console, and the native test suite carries the
 // readable messages.
 
-/// a per-domain tracker bound to one neuron. constructed from stored
-/// entropy (hex, persisted by the loader) plus the site domain.
+/// a tracker bound to one neuron. constructed from stored entropy (hex,
+/// persisted by the loader) plus an identity domain — the key-derivation
+/// salt, deliberately *not* the site hostname. every site sharing one
+/// identity domain (the "cyberia" property group) derives the same neuron
+/// from the same entropy, which is what makes cross-domain identity work at
+/// all: entropy handed off between origins is useless if each site still
+/// salts the derivation with its own hostname. the hostname visitors
+/// actually see is a separate, per-event field — see `build_event`.
 #[wasm_bindgen]
 pub struct Tracker {
     seed: Seed,
-    domain: String,
+    identity_domain: String,
     hrp: String,
     bech32: String,
     pubkey_b64: String,
@@ -51,23 +57,26 @@ pub fn generate_entropy() -> String {
 
 #[wasm_bindgen]
 impl Tracker {
-    /// bind stored entropy (32-byte hex) to a domain.
+    /// bind stored entropy (32-byte hex) to an identity domain — the
+    /// key-derivation salt shared across every site in one property group,
+    /// not the visiting site's own hostname.
     #[wasm_bindgen(constructor)]
-    pub fn new(entropy_hex: &str, domain: &str, hrp: &str) -> Result<Tracker, String> {
+    pub fn new(entropy_hex: &str, identity_domain: &str, hrp: &str) -> Result<Tracker, String> {
         let bytes = lytics_event::hex::decode(entropy_hex).ok_or("entropy hex")?;
         let entropy: [u8; 32] = bytes.as_slice().try_into().map_err(|_| "entropy must be 32 bytes")?;
         let seed = Seed::from_entropy(entropy);
-        let neuron = seed.neuron(domain, hrp).map_err(|_| "derivation")?;
+        let neuron = seed.neuron(identity_domain, hrp).map_err(|_| "derivation")?;
         Ok(Tracker {
             bech32: neuron.bech32.clone(),
             pubkey_b64: base64_std(&neuron.pubkey),
             seed,
-            domain: domain.to_string(),
+            identity_domain: identity_domain.to_string(),
             hrp: hrp.to_string(),
         })
     }
 
-    /// the neuron this site observes.
+    /// the neuron this visitor is, shared across every site in the identity
+    /// domain's property group (see the struct doc).
     #[wasm_bindgen(getter)]
     pub fn neuron(&self) -> String {
         self.bech32.clone()
@@ -83,6 +92,7 @@ impl Tracker {
     pub fn build_event(
         &self,
         kind: &str,
+        hostname: &str,
         pathname: &str,
         navigation: Option<String>,
         referrer: Option<String>,
@@ -93,7 +103,7 @@ impl Tracker {
         timestamp: f64,
         target: u64,
     ) -> Result<String, String> {
-        let neuron = self.seed.neuron(&self.domain, &self.hrp).map_err(|_| "derivation")?;
+        let neuron = self.seed.neuron(&self.identity_domain, &self.hrp).map_err(|_| "derivation")?;
         let kind = match kind {
             "pageview" => Kind::Pageview,
             "attention" => Kind::Attention,
@@ -119,7 +129,7 @@ impl Tracker {
             agent,
             kind,
             navigation,
-            hostname: self.domain.clone(),
+            hostname: hostname.to_string(),
             pathname: pathname.to_string(),
             referrer,
             utm: None,
@@ -165,11 +175,11 @@ mod tests {
 
     #[test]
     fn builds_a_verifiable_event() {
-        let t = Tracker::new(ENTROPY, "cyber.page", "lytics").unwrap();
+        let t = Tracker::new(ENTROPY, "cyberia", "lytics").unwrap();
         let json = t
             .build_event(
-                "pageview", "/", Some("external".into()), None, None, None, None, None, 1.0,
-                lytics_event::target_from_difficulty(8),
+                "pageview", "cyber.page", "/", Some("external".into()), None, None, None, None,
+                None, 1.0, lytics_event::target_from_difficulty(8),
             )
             .unwrap();
         // the wasm ships without serde_json; the test parses via a dev-dep to
@@ -180,6 +190,27 @@ mod tests {
         lytics_event::sig_verify(&bytes, &event.body.neuron, &event.pubkey, &event.signature, "lytics").unwrap();
         assert_eq!(event.body.neuron, t.neuron());
         assert_eq!(event.body.kind, lytics_event::Kind::Pageview);
+        assert_eq!(event.body.hostname, "cyber.page");
+    }
+
+    #[test]
+    fn same_entropy_same_identity_domain_different_hostname_shares_one_neuron() {
+        // this is the whole point of splitting identity-domain from hostname:
+        // the same visitor, same entropy, browsing two different sites in one
+        // property group must derive to the same neuron, while each event
+        // still records the real site it happened on.
+        let a = Tracker::new(ENTROPY, "cyberia", "lytics").unwrap();
+        let b = Tracker::new(ENTROPY, "cyberia", "lytics").unwrap();
+        assert_eq!(a.neuron(), b.neuron());
+
+        let target = lytics_event::target_from_difficulty(8);
+        let ja = a.build_event("pageview", "cyb.ai", "/", None, None, None, None, None, None, 1.0, target).unwrap();
+        let jb = b.build_event("pageview", "soft3.org", "/", None, None, None, None, None, None, 1.0, target).unwrap();
+        let ea: lytics_event::Event = serde_json::from_str(&ja).unwrap();
+        let eb: lytics_event::Event = serde_json::from_str(&jb).unwrap();
+        assert_eq!(ea.body.neuron, eb.body.neuron);
+        assert_eq!(ea.body.hostname, "cyb.ai");
+        assert_eq!(eb.body.hostname, "soft3.org");
     }
 
     #[test]

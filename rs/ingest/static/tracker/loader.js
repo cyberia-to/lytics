@@ -18,17 +18,52 @@ const script =
   document.querySelector('script[type="module"][src*="loader.js"]');
 // default /lytics when embedded on cyberstates (same-origin subpath)
 const ENDPOINT = (script?.dataset?.endpoint || "/lytics").replace(/\/$/, "");
-const DOMAIN =
+// the real site a visit happened on — per-event, never fed into key derivation.
+const HOSTNAME =
   script?.dataset?.domain || location.hostname.replace(/^www\./, "");
+// the key-derivation salt. every site sharing one identity domain derives the
+// same neuron from the same entropy — this is what makes a visitor's identity
+// portable across cyb.ai/soft3.org/cyber.page/cyberstates.net at all. do not
+// default this to HOSTNAME: that would silently re-fragment identity back to
+// one neuron per site, defeating cross-domain linking below.
+const IDENTITY_DOMAIN = script?.dataset?.identityDomain || "cyberia";
 const HRP = script?.dataset?.hrp || "lytics";
+// sibling sites in the same identity domain — outbound links to these carry
+// the visitor's entropy across the origin boundary (localStorage can't).
+// cookies can't either: none of these are subdomains of a shared parent.
+const SIBLINGS = (
+  script?.dataset?.siblings ||
+  "cyber.page,cyb.ai,soft3.org,cyberstates.net,bostrom.network"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter((s) => s && s !== HOSTNAME);
+const LINK_PARAM = "_ly";
 const HEARTBEAT_MS = 15000; // instrument granularity — bounds attention lost to a killed tab
 const IDLE_MS = 5000; // input silence pauses the attention clock
 
-const KEY = `lytics:entropy:${DOMAIN}`;
+const KEY = `lytics:entropy:${IDENTITY_DOMAIN}`;
 let tracker, eventTarget, enrollTarget, ready;
 const queue = []; // events captured before the core is live
 
-// ── identity: 32-byte entropy lives in localStorage, per-domain ─────────────
+// ── identity: 32-byte entropy lives in localStorage, per identity domain ────
+// localStorage is origin-scoped — cyb.ai's JS cannot read soft3.org's entry,
+// and none of SIBLINGS shares a parent domain to cookie-share across. the
+// only channel between origins is the URL itself: a sibling site that just
+// sent this visitor here can carry the entropy as a one-shot query param.
+// adoptIncomingIdentity runs before the wasm core loads so the param is
+// consumed (and scrubbed from the visible URL) as early as possible.
+const ENTROPY_RE = /^[0-9a-f]{64}$/i;
+function adoptIncomingIdentity() {
+  const url = new URL(location.href);
+  const incoming = url.searchParams.get(LINK_PARAM);
+  if (!incoming || !ENTROPY_RE.test(incoming)) return;
+  // a sibling's decorated link is a deliberate "this is the same visitor"
+  // claim — trust it over whatever (or nothing) is already stored locally.
+  localStorage.setItem(KEY, incoming.toLowerCase());
+  url.searchParams.delete(LINK_PARAM);
+  history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+}
 function loadOrCreateEntropy() {
   let e = localStorage.getItem(KEY);
   if (!e) {
@@ -36,6 +71,33 @@ function loadOrCreateEntropy() {
     localStorage.setItem(KEY, e);
   }
   return e;
+}
+// decorate outbound links to sibling sites with this visitor's entropy so
+// the landing page can adopt it via adoptIncomingIdentity above — the only
+// way identity crosses an origin boundary here. capture phase + mutating
+// the href in place (not a synthetic navigation) means this works
+// regardless of how the click is handled downstream: plain click, new tab,
+// ctrl/cmd-click, middle-click all read the same href.
+function decorateOutboundLinks() {
+  document.addEventListener(
+    "click",
+    (ev) => {
+      const a = ev.target.closest && ev.target.closest("a[href]");
+      if (!a) return;
+      let dest;
+      try {
+        dest = new URL(a.href, location.href);
+      } catch {
+        return;
+      }
+      if (!SIBLINGS.includes(dest.hostname.replace(/^www\./, ""))) return;
+      const entropy = localStorage.getItem(KEY);
+      if (!entropy) return;
+      dest.searchParams.set(LINK_PARAM, entropy);
+      a.href = dest.toString();
+    },
+    { capture: true },
+  );
 }
 // export/import as a human-readable 24-word backup loads the wordlist lazily
 // — a rare, deliberate action, never on the signing path. `words.js` wraps
@@ -74,6 +136,7 @@ async function send(spec) {
   // (no JSON parse in the wasm; nothing to stringify here)
   const json = tracker.build_event(
     spec.kind,
+    HOSTNAME,
     spec.pathname,
     spec.navigation ?? undefined,
     spec.referrer ?? undefined,
@@ -153,7 +216,7 @@ async function flushAttention() {
 let firstView = true;
 function pageview() {
   const nav = firstView
-    ? document.referrer && !document.referrer.includes(DOMAIN)
+    ? document.referrer && !document.referrer.includes(HOSTNAME)
       ? "external"
       : "direct"
     : "internal";
@@ -215,12 +278,16 @@ addEventListener("pagehide", () => {
 addEventListener("blur", accrue);
 setInterval(flushAttention, HEARTBEAT_MS);
 
+// adopt a sibling-handoff identity (and scrub it from the URL) before
+// anything else reads location.href or localStorage.
+adoptIncomingIdentity();
+decorateOutboundLinks();
 // capture the first pageview immediately, then bring the core up
 pageview();
 hookHistory();
 (async () => {
   await init();
-  tracker = new Tracker(loadOrCreateEntropy(), DOMAIN, HRP);
+  tracker = new Tracker(loadOrCreateEntropy(), IDENTITY_DOMAIN, HRP);
   enrolled = await difficulty();
   ready = true;
   window.lytics.neuron = tracker.neuron;
