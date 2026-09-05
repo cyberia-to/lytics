@@ -186,6 +186,22 @@ orders of magnitude more than a visitor, while a real first visit absorbs
 the cost invisibly behind reading. PoW prices signals; it never
 authenticates humanity — that honesty stands.
 
+### work quanta — attention mining (design, unbuilt)
+
+the same PoW machinery inverts into a reward channel: during an active
+attention window the core accumulates work quanta — background hashes at
+duty-cycle rates (a few percent of one core, thermals first) — and each
+signed attention event carries its quanta count as a `work` field beside
+`pow`. a chain-side contract (the uhash attachable-proof envelope, see
+`uhash/docs/viewing-economy.md` and rewards §8) turns accumulated quanta
+into period lottery tickets: viewing becomes the first rung of cyber's
+distribution ladder — "get paid to understand", literally. the honesty
+conventions carry over unchanged: quanta price attention, they never
+prove it; a bot that burns CPU earns no more than a plain miner, so
+faking viewing is strictly wasteful. unbuilt: the `work` field, the
+quanta accumulator in core.wasm, and the contract wiring are phase 6+
+work and appear here so the event schema reserves the seam.
+
 ### replay and time
 
 events are content-addressed: the event hash is the particle hash, so a
