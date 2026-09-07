@@ -56,6 +56,7 @@ impl Chains {
             network: SELF_NETWORK,
             links: vec![link],
             delta_pi: vec![],
+            box_moves: vec![], // private conviction spends (WP3) — none in analytics casts
             prev,
             step,
             height: ts_secs,

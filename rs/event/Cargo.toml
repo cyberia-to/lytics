@@ -31,7 +31,7 @@ k256.workspace = true
 # drops mudra's `bridge` feature (bip32/bip39, the legacy-key-recovery path)
 # — lytics has no legacy account to recover, and the wasm tracker can't
 # afford bip32's HMAC-SHA512 ladder regardless.
-mudra = { path = "../../../mudra", default-features = false }
+mudra = { package = "cyber-mudra", path = "../../../mudra", default-features = false }
 bip39 = { workspace = true, optional = true }
 getrandom.workspace = true
 
