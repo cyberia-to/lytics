@@ -1621,7 +1621,14 @@
             function renderSiteChips(siteRows) {
                 const el = document.getElementById("site-chips");
                 if (!el) return;
-                const known = (siteRows || []).map((r) => r.key);
+                // chips: real sites only — every Netlify deploy preview and
+                // localhost run registers its own one-neuron hostname, and a
+                // chip per preview buries the five real domains. the SITES
+                // table below still lists everything, unfiltered.
+                const known = (siteRows || [])
+                    .filter((r) => (r.neurons ?? 0) > 1)
+                    .slice(0, 10)
+                    .map((r) => r.key);
                 const ids = ["all", ...known];
                 if (siteId !== "all" && !known.includes(siteId))
                     ids.push(siteId); // keep the active filter visible even at 0 events
