@@ -155,13 +155,21 @@ pub fn in_window(events: &[Stored], from: u64, to: u64) -> Vec<&Stored> {
         .collect()
 }
 
-/// canonical site key for grouping/filtering: lowercased hostname, `www.`
-/// stripped — the same normalization `enrich::attribute` applies when
-/// deciding internal-vs-external, so the two never disagree about what
-/// site an event belongs to.
+/// canonical site key for grouping/filtering: lowercased, `www.` stripped,
+/// then reduced to the registrable domain (last two labels) — without this
+/// every Netlify deploy preview (`<hash>--site.netlify.app`) and service
+/// subdomain becomes its own site row and buries the real domains.
+/// single-label hosts (localhost) and IP literals pass through whole.
+/// two-level public suffixes (co.uk) would need a real PSL — nothing in
+/// this fleet uses one, so last-two-labels is the honest simple rule.
 pub fn normalize_site(hostname: &str) -> String {
     let h = hostname.to_ascii_lowercase();
-    h.strip_prefix("www.").unwrap_or(&h).to_string()
+    let h = h.strip_prefix("www.").unwrap_or(&h);
+    let labels: Vec<&str> = h.split('.').filter(|l| !l.is_empty()).collect();
+    if labels.len() <= 2 || labels.iter().all(|l| l.chars().all(|c| c.is_ascii_digit())) {
+        return h.to_string();
+    }
+    labels[labels.len() - 2..].join(".")
 }
 
 /// restrict the full event log to one site (normalized hostname match).

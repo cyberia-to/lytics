@@ -1726,11 +1726,16 @@ mod tests {
             // same neuron, hours later, different site → a second passage
             on_site(pv("n1", "/docs", 50_000_000), "soft3.org"),
             on_site(pv("n2", "/", 1_500), "www.CYBER.page"), // normalization: www + case
+            // netlify deploy previews aggregate to the registrable domain
+            on_site(pv("n3", "/", 1_600), "abc123--cyber-dot-page.netlify.app"),
+            on_site(pv("n4", "/", 1_700), "def456--cyber-dot-page.netlify.app"),
         ];
         let r = refs(&events);
         let rows = sites(&r, 16);
         let arr = rows.as_array().unwrap();
-        assert_eq!(arr.len(), 3);
+        assert_eq!(arr.len(), 4);
+        let nfy = arr.iter().find(|row| row["key"] == "netlify.app").unwrap();
+        assert_eq!(nfy["neurons"], 2); // both previews, one row
         let by_key = |k: &str| arr.iter().find(|row| row["key"] == k).cloned().unwrap();
         let cyb = by_key("cyb.ai");
         assert_eq!(cyb["neurons"], 1);
