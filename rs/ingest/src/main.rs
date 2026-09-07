@@ -358,11 +358,23 @@ async fn get_report(
         _ => "all",
     };
 
+    // site cut: one tracker deploy feeds one dataset from every domain; this
+    // narrows the whole pipeline (window, first-seen, retention, returns,
+    // live) to a single hostname, so "new" means new-to-that-site. filtering
+    // clones the matching events, but only on a cache miss — the report
+    // cache absorbs repeat calls until data_version moves.
+    let site = q
+        .get("site")
+        .map(|s| reports::normalize_site(s))
+        .filter(|s| !s.is_empty() && s != "all");
+
     let mut out = if let Some(v) = cached {
         v
     } else {
-        let windowed_all = reports::in_window(&app.events, from, to);
-        let first_seen = reports::first_seen(&app.events);
+        let site_log = site.as_deref().map(|s| reports::filter_site(&app.events, s));
+        let log: &[Stored] = site_log.as_deref().unwrap_or(&app.events);
+        let windowed_all = reports::in_window(log, from, to);
+        let first_seen = reports::first_seen(log);
         let windowed = reports::filter_audience(&windowed_all, &first_seen, from, audience);
         let computed = match name.as_str() {
             "overview" => {
@@ -393,6 +405,7 @@ async fn get_report(
             "particles" => inf_reports::particles(&windowed, limit),
             "sources" => inf_reports::sources(&windowed, limit),
             "channels" => inf_reports::channels(&windowed),
+            "sites" => inf_reports::sites(&windowed, limit.max(16)),
             "actors" => inf_reports::actors(&windowed),
             "devices" => inf_reports::devices(&windowed, limit),
             "countries" => inf_reports::countries(&windowed, limit),
@@ -405,14 +418,14 @@ async fn get_report(
                 // to the live horizon so NEW/RETURNING stay meaningful.
                 let horizon = parse_u64("horizon_ms", 15 * 60 * 1000);
                 let live_from = now.saturating_sub(horizon);
-                let live_all = reports::in_window(&app.events, live_from, now + 1);
-                let live_fs = reports::first_seen(&app.events);
+                let live_all = reports::in_window(log, live_from, now + 1);
+                let live_fs = reports::first_seen(log);
                 let live_ev = reports::filter_audience(&live_all, &live_fs, live_from, audience);
                 juice::live(&live_ev, now, horizon)
             }
-            "retention" => inf_reports::retention(&app.events, parse_u64("weeks", 8) as usize),
+            "retention" => inf_reports::retention(log, parse_u64("weeks", 8) as usize),
             "returns" => inf_reports::returns(
-                &app.events,
+                log,
                 from,
                 to,
                 parse_u64("horizon_ms", 7 * 24 * 3600 * 1000),

@@ -155,6 +155,28 @@ pub fn in_window(events: &[Stored], from: u64, to: u64) -> Vec<&Stored> {
         .collect()
 }
 
+/// canonical site key for grouping/filtering: lowercased hostname, `www.`
+/// stripped — the same normalization `enrich::attribute` applies when
+/// deciding internal-vs-external, so the two never disagree about what
+/// site an event belongs to.
+pub fn normalize_site(hostname: &str) -> String {
+    let h = hostname.to_ascii_lowercase();
+    h.strip_prefix("www.").unwrap_or(&h).to_string()
+}
+
+/// restrict the full event log to one site (normalized hostname match).
+/// runs on the log, before windowing — so first-seen, retention and returns
+/// all become site-local too: with cross-domain identity one neuron exists
+/// on many sites, and "new on cyb.ai" must mean first touch *of cyb.ai*,
+/// not first touch of the whole property group.
+pub fn filter_site(events: &[Stored], site: &str) -> Vec<Stored> {
+    events
+        .iter()
+        .filter(|e| normalize_site(&e.body.hostname) == site)
+        .cloned()
+        .collect()
+}
+
 /// earliest event timestamp per neuron across the full log.
 pub fn first_seen(events: &[Stored]) -> BTreeMap<String, u64> {
     let mut m = BTreeMap::new();

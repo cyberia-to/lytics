@@ -1084,6 +1084,7 @@
 
             <div class="window-chips" id="chips"></div>
             <div class="window-chips" id="aud-chips"></div>
+            <div class="window-chips" id="site-chips"></div>
             <div class="meta-line" id="meta">loading window…</div>
 
             <div class="section-label">
@@ -1254,6 +1255,17 @@
                 <table class="cyber-table" id="devices"></table>
             </div>
 
+            <div class="section-label">sites</div>
+            <div class="table-wrap">
+                <table class="cyber-table" id="sites"></table>
+            </div>
+            <p class="hint">
+                one tracker, one dataset, split back per domain. a visit is
+                credited to the site of its first event (GA-style entry
+                attribution); the chips above re-scope every report on this
+                page to one site instead.
+            </p>
+
             <div class="section-label">visits by source</div>
             <div class="table-wrap">
                 <table class="cyber-table" id="sources"></table>
@@ -1303,6 +1315,10 @@
             let audienceId =
                 new URLSearchParams(location.search).get("a") || "all";
             if (!AUDIENCES.some((a) => a.id === audienceId)) audienceId = "all";
+            // site cut — one dataset, filtered per domain server-side. chip
+            // list is data-driven from the sites report, so a new domain
+            // shows up here the moment its first event lands.
+            let siteId = new URLSearchParams(location.search).get("s") || "all";
 
             function windowSpec() {
                 return WINDOWS.find((w) => w.id === windowId) || WINDOWS[1];
@@ -1316,7 +1332,11 @@
                 const w = windowSpec();
                 const to = Date.now() + 1;
                 const from = Date.now() - w.ms;
-                return `?from=${from}&to=${to}&limit=50&audience=${audienceId}`;
+                const site =
+                    siteId === "all"
+                        ? ""
+                        : `&site=${encodeURIComponent(siteId)}`;
+                return `?from=${from}&to=${to}&limit=50&audience=${audienceId}${site}`;
             }
             const get = (name, extra = "") => {
                 const base = qs();
@@ -1332,6 +1352,7 @@
                 const u = new URL(location.href);
                 u.searchParams.set("w", windowId);
                 u.searchParams.set("a", audienceId);
+                u.searchParams.set("s", siteId);
                 history.replaceState(null, "", u);
             }
 
@@ -1587,6 +1608,32 @@
                 document.querySelectorAll("#aud-chips .chip").forEach((btn) => {
                     btn.onclick = () => {
                         audienceId = btn.dataset.a;
+                        setQueryState();
+                        refresh();
+                    };
+                });
+            }
+
+            // site chips are data-driven: every hostname that ever sent an
+            // event in the window gets a chip. rendered from the sites
+            // report each refresh, so a newly instrumented domain appears
+            // without a dash change.
+            function renderSiteChips(siteRows) {
+                const el = document.getElementById("site-chips");
+                if (!el) return;
+                const known = (siteRows || []).map((r) => r.key);
+                const ids = ["all", ...known];
+                if (siteId !== "all" && !known.includes(siteId))
+                    ids.push(siteId); // keep the active filter visible even at 0 events
+                el.innerHTML = ids
+                    .map(
+                        (s) =>
+                            `<button type="button" class="chip ${s === siteId ? "on" : ""}" data-s="${s}">${s === "all" ? "ALL SITES" : s}</button>`,
+                    )
+                    .join("");
+                el.querySelectorAll(".chip").forEach((btn) => {
+                    btn.onclick = () => {
+                        siteId = btn.dataset.s;
                         setQueryState();
                         refresh();
                     };
@@ -2642,6 +2689,29 @@
                     ["attention", "num"],
                 ];
 
+                // sites: always fetched unfiltered by site — the table
+                // compares domains side by side and the chips need the full
+                // domain list, even while one site chip is active.
+                const sw = windowSpec();
+                const siteRows = await fetch(
+                    `${root}api/report/sites?from=${Date.now() - sw.ms}&to=${Date.now() + 1}&limit=16&audience=${audienceId}`,
+                ).then((r) => r.json());
+                renderSiteChips(siteRows);
+                table(
+                    document.getElementById("sites"),
+                    [
+                        "SITE",
+                        "NEURONS",
+                        "VISITS",
+                        "VIEWS",
+                        "DEPTH",
+                        "DWELL",
+                        "ATT/N",
+                        "ATTENTION",
+                    ],
+                    siteRows.map(mapVisitRow),
+                    visitCols,
+                );
                 table(
                     document.getElementById("sources"),
                     [

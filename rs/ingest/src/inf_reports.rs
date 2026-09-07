@@ -392,6 +392,18 @@ fn passage_source(events: &[&Stored]) -> LocalSource {
         attrib_rows,
     );
 
+    let site_rows: Vec<Tuple> = events
+        .iter()
+        .map(|e| {
+            vec![
+                Value::str(&e.body.neuron),
+                Value::int(e.body.timestamp as i64),
+                Value::str(&crate::reports::normalize_site(&e.body.hostname)),
+            ]
+        })
+        .collect();
+    s.add("site_ev", &["neuron", "ts", "site"], site_rows);
+
     s
 }
 
@@ -421,6 +433,7 @@ const RULE_XPATH: &str = "xt[neuron, passage_id, max(ts)] := pid{neuron, ts, pas
 const RULE_KT: &str = "kt[neuron, passage_id, min(ts)] := pid{neuron, ts, passage_id}\n";
 const RULE_KSRC: &str = "ksrc[neuron, passage_id, source] := kt[neuron, passage_id, key_ts], attrib_ev{neuron, ts: key_ts, source}\n";
 const RULE_KCHAN: &str = "kchan[neuron, passage_id, channel] := kt[neuron, passage_id, key_ts], attrib_ev{neuron, ts: key_ts, channel}\n";
+const RULE_KSITE: &str = "ksite[neuron, passage_id, site] := kt[neuron, passage_id, key_ts], site_ev{neuron, ts: key_ts, site}\n";
 
 /// total passage count and total views-across-all-passages (the latter is
 /// just the overall pageview count restated, but computed the same way as
@@ -544,7 +557,11 @@ pub fn passages_report(events: &[&Stored], limit: usize) -> serde_json::Value {
 /// inner join — same reasoning `timeseries` already applies by merging three
 /// separate bucketed queries in Rust instead of one.
 fn visit_breakdown(src: &LocalSource, rel: &str, col: &str, limit: usize) -> serde_json::Value {
-    let key_rule = if rel == "ksrc" { RULE_KSRC } else { RULE_KCHAN };
+    let key_rule = match rel {
+        "ksrc" => RULE_KSRC,
+        "ksite" => RULE_KSITE,
+        _ => RULE_KCHAN,
+    };
     let visits: BTreeMap<String, u64> = q(
         src,
         &format!(
@@ -640,6 +657,18 @@ pub fn sources(events: &[&Stored], limit: usize) -> serde_json::Value {
 pub fn channels(events: &[&Stored]) -> serde_json::Value {
     let src = passage_source(events);
     visit_breakdown(&src, "kchan", "channel", 32)
+}
+
+/// per-site (hostname) breakdown — one tracker deploy, one dataset, and this
+/// is the report that splits it back out per domain. a visit is attributed
+/// to the site of its key (first) event, same convention as sources/channels
+/// — so a cross-domain passage (cyb.ai → cyber.page inside one visit,
+/// which shared neuron identity makes possible) credits its full
+/// views/attention to the entry site, exactly like GA session attribution.
+/// per-event exactness is what the `site=` filter param gives instead.
+pub fn sites(events: &[&Stored], limit: usize) -> serde_json::Value {
+    let src = passage_source(events);
+    visit_breakdown(&src, "ksite", "site", limit)
 }
 
 /// ordered funnel: neurons reaching each prefix of `steps`, in order.
@@ -1679,6 +1708,40 @@ mod tests {
         let arr = inf.as_array().unwrap();
         let direct = arr.iter().find(|row| row["channel"] == "direct").unwrap();
         assert_eq!(direct["visits"], 2);
+    }
+
+    fn on_site(mut s: Stored, hostname: &str) -> Stored {
+        s.body.hostname = hostname.into();
+        s
+    }
+
+    #[test]
+    fn sites_splits_one_dataset_per_hostname() {
+        // one shared dataset, three hostnames; n1 visits two sites, n2 one.
+        // sites must credit each visit to the site of its first event and
+        // count distinct neurons per site, not globally.
+        let events = vec![
+            on_site(pv("n1", "/", 1_000), "cyb.ai"),
+            on_site(attn("n1", "/", 2_000, 5_000), "cyb.ai"),
+            // same neuron, hours later, different site → a second passage
+            on_site(pv("n1", "/docs", 50_000_000), "soft3.org"),
+            on_site(pv("n2", "/", 1_500), "www.CYBER.page"), // normalization: www + case
+        ];
+        let r = refs(&events);
+        let rows = sites(&r, 16);
+        let arr = rows.as_array().unwrap();
+        assert_eq!(arr.len(), 3);
+        let by_key = |k: &str| arr.iter().find(|row| row["key"] == k).cloned().unwrap();
+        let cyb = by_key("cyb.ai");
+        assert_eq!(cyb["neurons"], 1);
+        assert_eq!(cyb["visits"], 1);
+        assert_eq!(cyb["views"], 1);
+        assert_eq!(cyb["attention_ms"], 5_000);
+        let soft3 = by_key("soft3.org");
+        assert_eq!(soft3["neurons"], 1);
+        assert_eq!(soft3["visits"], 1);
+        let cp = by_key("cyber.page"); // www./case stripped by normalize_site
+        assert_eq!(cp["neurons"], 1);
     }
 
     #[test]
