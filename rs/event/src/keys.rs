@@ -57,7 +57,7 @@ pub struct Neuron {
     /// bech32 wire form
     pub bech32: String,
     /// native id — Hemera(compressed pubkey)
-    pub native: [u8; 32],
+    pub native: mudra::NeuronId,
 }
 
 impl std::fmt::Debug for Neuron {

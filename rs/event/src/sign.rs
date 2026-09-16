@@ -50,6 +50,15 @@ pub fn verify(
     signature_b64: &str,
     hrp: &str,
 ) -> Result<(), SignError> {
+    verify_native(body_bytes,neuron_bech32,pubkey_b64,signature_b64,hrp).map(|_|())
+}
+
+/// The verified native subject uses the same compressed public key at ingest
+/// and replay. No hash of a bech32 presentation is substituted for that key.
+pub fn verify_native(
+    body_bytes:&[u8], neuron_bech32:&str, pubkey_b64:&str,
+    signature_b64:&str, hrp:&str,
+) -> Result<mudra::NeuronId,SignError> {
     let pubkey_bytes =
         crate::b64::decode(pubkey_b64).ok_or_else(|| SignError::Base64("pubkey".into()))?;
     let pubkey: [u8; 33] = pubkey_bytes
@@ -66,7 +75,7 @@ pub fn verify(
     let signature: [u8; 64] =
         sig_bytes.as_slice().try_into().map_err(|_| SignError::Invalid)?;
     if mudra::claim::verify_arbitrary(&pubkey, neuron_bech32, body_bytes, &signature) {
-        Ok(())
+        Ok(mudra::claim::neuron_of(&pubkey))
     } else {
         Err(SignError::Invalid)
     }

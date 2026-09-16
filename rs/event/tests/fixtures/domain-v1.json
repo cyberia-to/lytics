@@ -1,0 +1,13 @@
+[
+  {
+    "address": "lytics1h2799ranw638cp8cn5ygmlvcvt7yhzyxrqcur4",
+    "adr036_doc": "{\"account_number\":\"0\",\"chain_id\":\"\",\"fee\":{\"amount\":[],\"gas\":\"0\"},\"memo\":\"\",\"msgs\":[{\"type\":\"sign/MsgSignData\",\"value\":{\"data\":\"eyJoZWxsbyI6IndvcmxkIn0=\",\"signer\":\"lytics1h2799ranw638cp8cn5ygmlvcvt7yhzyxrqcur4\"}}],\"sequence\":\"0\"}",
+    "body": "{\"hello\":\"world\"}",
+    "domain": "example.com",
+    "entropy_hex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "hrp": "lytics",
+    "native_hex": "ff827e3f76be1676fec97705900b8140985636707d0b805942b9692f7371ff78",
+    "pubkey_hex": "03d0e74f894c1658d1c7ea8a8885e450251549d370ed9b59f41ea9a6ffa11cf91e",
+    "signature_hex": "64f1d62893ce3bcd91cb7b7bd8397b13c68028ef1ef13d64a9e113c9583394284b1c63d983811af67f8aff4df17d572f521bfac1539a0101b8657e6bf607f297"
+  }
+]
