@@ -352,6 +352,7 @@ mod tests {
 
     fn pv(neuron: &str, path: &str, ts: u64, nav: Navigation) -> Stored {
         Stored {
+            provenance: None,
             body: EventBody {
                 neuron: neuron.into(),
                 actor: lytics_event::Actor::Human,

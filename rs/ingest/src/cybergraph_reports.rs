@@ -50,11 +50,16 @@ pub async fn get_report(
     let app = state.lock().expect("lock");
     let limit = q.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20usize);
     let out = match name.as_str() {
-        "overview" => overview(&app.cell),
-        "chains" => chains(&app.cell, limit),
-        "recent_signals" => recent_signals(&app.cell, limit),
-        "networks" => networks(&app.cell, limit),
-        "size" => size_bytes(&app.cell),
+        "provenance" => json!({
+            "verified_native_events":app.events.iter().filter(|e|e.provenance.is_some()).count(),
+            "legacy_unresolved_events":app.events.iter().filter(|e|e.provenance.is_none()).count(),
+            "projection":"local observations; no visitor dispatch authority",
+        }),
+        "overview" => overview(&app.graph),
+        "chains" => chains(&app.graph, limit),
+        "recent_signals" => recent_signals(&app.graph, limit),
+        "networks" => networks(&app.graph, limit),
+        "size" => size_bytes(&app.graph),
         _ => return (StatusCode::NOT_FOUND, "unknown report").into_response(),
     };
     Json(out).into_response()
@@ -63,10 +68,10 @@ pub async fn get_report(
 /// neurons with a chain, total signals across all chains, and how many
 /// distinct network labels have been declared (see module doc: distinct
 /// labels sharing one physical state today, not a partition).
-pub fn overview(cell: &Cybergraph) -> serde_json::Value {
-    let neurons_with_chains = cell.chains.len();
-    let total_signals: usize = cell.chains.values().map(|c| c.entries.len()).sum();
-    let networks: std::collections::BTreeSet<[u8; 32]> = cell
+pub fn overview(graph: &Cybergraph) -> serde_json::Value {
+    let neurons_with_chains = graph.chains.len();
+    let total_signals: usize = graph.chains.values().map(|c| c.entries.len()).sum();
+    let networks: std::collections::BTreeSet<[u8; 32]> = graph
         .chains
         .values()
         .flat_map(|c| c.entries.values().map(|s| s.network))
@@ -80,8 +85,8 @@ pub fn overview(cell: &Cybergraph) -> serde_json::Value {
 
 /// one row per neuron with a chain: its length and the tip (latest step,
 /// height, hash) — sorted by chain length, the most active visitors first.
-pub fn chains(cell: &Cybergraph, limit: usize) -> serde_json::Value {
-    let mut rows: Vec<(String, usize, u64, u64, String)> = cell
+pub fn chains(graph: &Cybergraph, limit: usize) -> serde_json::Value {
+    let mut rows: Vec<(String, usize, u64, u64, String)> = graph
         .chains
         .iter()
         .filter_map(|(neuron, chain)| {
@@ -103,8 +108,8 @@ pub fn chains(cell: &Cybergraph, limit: usize) -> serde_json::Value {
 /// the most recent signals across every chain, links unrolled — the actual
 /// cyberlinks (from/to/token/amount/valence) each signal bundled, not just
 /// bbg's post-aggregation view of them.
-pub fn recent_signals(cell: &Cybergraph, limit: usize) -> serde_json::Value {
-    let mut rows: Vec<serde_json::Value> = cell
+pub fn recent_signals(graph: &Cybergraph, limit: usize) -> serde_json::Value {
+    let mut rows: Vec<serde_json::Value> = graph
         .chains
         .iter()
         .flat_map(|(neuron, chain)| {
@@ -144,9 +149,9 @@ pub fn recent_signals(cell: &Cybergraph, limit: usize) -> serde_json::Value {
 
 /// signals grouped by declared network label — see module doc: many
 /// distinct labels, one shared physical state, shown honestly.
-pub fn networks(cell: &Cybergraph, limit: usize) -> serde_json::Value {
+pub fn networks(graph: &Cybergraph, limit: usize) -> serde_json::Value {
     let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
-    for chain in cell.chains.values() {
+    for chain in graph.chains.values() {
         for s in chain.entries.values() {
             *counts.entry(hex::encode(s.network)).or_default() += 1;
         }
@@ -166,20 +171,20 @@ pub fn networks(cell: &Cybergraph, limit: usize) -> serde_json::Value {
 /// per-element. same estimate caveat as `bbg_reports::size_bytes`: data
 /// payload only, `BTreeMap` node overhead and `Vec` capacity-vs-len slack
 /// are real and not included.
-pub fn size_bytes(cell: &Cybergraph) -> serde_json::Value {
+pub fn size_bytes(graph: &Cybergraph) -> serde_json::Value {
     const KEY: usize = 32; // NeuronId / step key contribution, rounded consistently with bbg_reports
 
     let mut signal_shells = 0usize;
     let mut cyberlinks = 0usize;
     let mut delta_pi = 0usize;
-    for chain in cell.chains.values() {
+    for chain in graph.chains.values() {
         for signal in chain.entries.values() {
             signal_shells += 8 + std::mem::size_of_val(signal); // u64 step key + Signal shell
             cyberlinks += signal.links.iter().map(std::mem::size_of_val).sum::<usize>();
             delta_pi += signal.delta_pi.iter().map(std::mem::size_of_val).sum::<usize>();
         }
     }
-    let chain_keys = cell.chains.len() * KEY;
+    let chain_keys = graph.chains.len() * KEY;
     let total = signal_shells + cyberlinks + delta_pi + chain_keys;
 
     json!({

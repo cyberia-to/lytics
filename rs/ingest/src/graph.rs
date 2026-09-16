@@ -3,17 +3,17 @@
 // crystal-type: source
 // crystal-domain: cyber
 // ---
-//! casting events into the cell — one signal per event.
+//! casting events into the graph — one signal per event.
 //!
 //! the event particle links to the page particle inside the neuron's signal
 //! chain; the chain (step, prev) is tracked per native neuron so cybergraph's
-//! ordering gate accepts every append. the cell is a derived index — it is
+//! ordering gate accepts every append. the graph is a derived index — it is
 //! rebuilt from the payload log at startup.
 
 use cybergraph::{Cybergraph, CyberlinkRecord, Signal, SELF_NETWORK};
 use std::collections::BTreeMap;
 
-pub type NeuronId = [u8; 32];
+pub use cybergraph::NeuronId;
 pub type Particle = [u8; 32];
 
 /// page particle: hemera over "hostname pathname".
@@ -32,10 +32,10 @@ pub struct Chains {
 }
 
 impl Chains {
-    /// cast one event into the cell: event particle → page particle.
+    /// cast one event into the graph: event particle → page particle.
     pub fn cast(
         &mut self,
-        cell: &mut Cybergraph,
+        graph: &mut Cybergraph,
         native: NeuronId,
         event_particle: Particle,
         page: Particle,
@@ -63,7 +63,7 @@ impl Chains {
             proof: None,
         };
         let hash = signal.hash();
-        cell.link(signal).map_err(|e| format!("{e:?}"))?;
+        graph.link(signal).map_err(|e| format!("{e:?}"))?;
         self.cursors.insert(native, (step + 1, hash));
         Ok(())
     }

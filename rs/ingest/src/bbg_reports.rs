@@ -48,7 +48,7 @@ pub async fn get_report(
 ) -> impl IntoResponse {
     let app = state.lock().expect("lock");
     let limit = q.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20usize);
-    let bbg_state = &app.cell.bbg.state;
+    let bbg_state = &app.graph.bbg.state;
     let out = match name.as_str() {
         "overview" => overview(bbg_state),
         "particles" => particles(bbg_state, limit),

@@ -6,8 +6,9 @@
 //! lytics ingest — the engine: verify → enrich → append → cast → report.
 //!
 //! spec: lytics/specs/README.md. the payload log is the source of truth;
-//! the cell and the in-memory index are replayed from it at startup.
+//! the graph and the in-memory index are replayed from it at startup.
 
+mod provenance;
 mod bbg_reports;
 mod cybergraph_reports;
 mod enrich;
@@ -25,7 +26,7 @@ use axum::response::{Html, IntoResponse, Json};
 use axum::routing::{delete, get, post};
 use tower_http::cors::CorsLayer;
 use cybergraph::Cybergraph;
-use lytics_event::{Event, event_hash, pow_verify, sig_verify, target_from_difficulty};
+use lytics_event::{Event, event_hash, pow_verify, verify_native, target_from_difficulty};
 use reports::Stored;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -48,7 +49,7 @@ struct App {
     cfg: Cfg,
     geo: Option<geo::GeoDb>,
     store: store::Store,
-    cell: Cybergraph,
+    graph: Cybergraph,
     chains: graph::Chains,
     events: Vec<Stored>,
     seen: BTreeSet<[u8; 32]>,
@@ -119,7 +120,7 @@ fn ingest(
         return Err(Reject::Bad("timestamp beyond the stale horizon".into()));
     }
 
-    sig_verify(
+    let native = verify_native(
         &body_bytes,
         &event.body.neuron,
         &event.pubkey,
@@ -145,12 +146,9 @@ fn ingest(
         (Some(db), Some(ip)) => db.lookup(ip),
         _ => None,
     };
-    let native = *hemera::hash(
-        &base64_decode(&event.pubkey).ok_or_else(|| Reject::Bad("pubkey b64".into()))?,
-    )
-    .as_bytes();
 
     let stored = Stored {
+        provenance: Some(provenance::Origin::capture(&event,&app.cfg.hrp,target)),
         body: event.body.clone(),
         event_hash: hash_hex.clone(),
         attribution,
@@ -167,13 +165,13 @@ fn ingest(
     // it runs inline on the hot path again
     let page = graph::page_particle(&event.body.hostname, &event.body.pathname);
     if let Err(e) = app.chains.cast(
-        &mut app.cell,
+        &mut app.graph,
         native,
         hash,
         page,
         event.body.timestamp / 1000,
     ) {
-        eprintln!("cell cast failed for {hash_hex}: {e}");
+        eprintln!("graph cast failed for {hash_hex}: {e}");
     }
 
     app.seen.insert(hash);
@@ -182,47 +180,28 @@ fn ingest(
     Ok(("accepted", hash_hex))
 }
 
-fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.decode(s).ok()
-}
-
-/// rebuild index + cell from the payload log. natives are recomputed from
-/// stored neuron strings — the cell chain restarts per boot, deterministic
-/// because the log order is fixed.
-fn replay(app: &mut App) {
-    let frames = match app.store.replay() {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("replay failed: {e}");
-            return;
+/// Rebuild private payload observations and the native graph projection only
+/// after all readable history validates. Missing old signatures remain explicit.
+fn replay(app: &mut App) -> Result<(),String> {
+    let frames=app.store.replay().map_err(|e|e.to_string())?;
+    let mut graph=Cybergraph::new();let mut chains=graph::Chains::default();
+    let mut seen=BTreeSet::new();let mut events=Vec::new();
+    for (frame_subject,plaintext) in frames {
+        let stored:Stored=serde_json::from_slice(&plaintext).map_err(|_|"malformed readable event history")?;
+        if stored.body.neuron!=frame_subject{return Err("event/frame subject mismatch".into());}
+        let hash=event_hash(&lytics_event::encode_body(&stored.body));
+        if hex::encode(hash)!=stored.event_hash{return Err("stored event hash mismatch".into());}
+        let native=stored.provenance.as_ref().map(|p|p.verify(&stored.body,&app.cfg.hrp)).transpose()?;
+        if !seen.insert(hash){continue;}
+        if let Some(native)=native {
+            chains.cast(&mut graph,native,hash,graph::page_particle(&stored.body.hostname,&stored.body.pathname),stored.body.timestamp/1000)?;
         }
-    };
-    for (_neuron, plaintext) in frames {
-        let Ok(stored) = serde_json::from_slice::<Stored>(&plaintext) else {
-            continue;
-        };
-        let Ok(raw) = hex::decode(&stored.event_hash) else {
-            continue;
-        };
-        let Ok(hash) = <[u8; 32]>::try_from(raw.as_slice()) else {
-            continue;
-        };
-        // native id for replay: hemera of the bech32 — a stable per-neuron
-        // chain id (the pubkey lives only in the wire event)
-        let native = *hemera::hash(stored.body.neuron.as_bytes()).as_bytes();
-        let page = graph::page_particle(&stored.body.hostname, &stored.body.pathname);
-        let _ = app.chains.cast(
-            &mut app.cell,
-            native,
-            hash,
-            page,
-            stored.body.timestamp / 1000,
-        );
-        app.seen.insert(hash);
-        app.events.push(stored);
+        events.push(stored);
     }
-    app.events.sort_by_key(|e| e.body.timestamp);
+    events.sort_by_key(|e|e.body.timestamp);
+    app.graph=graph;app.chains=chains;app.seen=seen;app.events=events;
+    app.report_cache.clear();app.data_version=app.data_version.checked_add(1).ok_or("report revision exhausted")?;
+    Ok(())
 }
 
 // ── handlers ─────────────────────────────────────────────────────────────────
@@ -304,7 +283,7 @@ async fn post_query(
     if !authorized(&headers, &app.cfg.owner_token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    match app.cell.query(&script) {
+    match app.graph.query(&script) {
         Ok(out) => Json(json!({
             "columns": out.columns,
             "rows": out.rows.iter().map(|r| format!("{r:?}")).collect::<Vec<_>>(),
@@ -532,14 +511,14 @@ async fn main() {
         },
         geo: geo_db,
         store,
-        cell: Cybergraph::new(),
+        graph: Cybergraph::new(),
         chains: graph::Chains::default(),
         events: Vec::new(),
         seen: BTreeSet::new(),
         data_version: 0,
         report_cache: BTreeMap::new(),
     };
-    replay(&mut app);
+    replay(&mut app).expect("validate stored event provenance before serving");
     eprintln!("replayed {} events", app.events.len());
 
     let shared: Shared = Arc::new(Mutex::new(app));
@@ -599,7 +578,7 @@ mod tests {
             },
             geo: None,
             store: store::Store::open(&dir.to_string_lossy()).unwrap(),
-            cell: Cybergraph::new(),
+            graph: Cybergraph::new(),
             chains: graph::Chains::default(),
             events: Vec::new(),
             seen: BTreeSet::new(),
@@ -702,5 +681,49 @@ mod tests {
             ingest(&mut app, ev, None, None),
             Err(Reject::Bad(_))
         ));
+    }
+
+    #[test]
+    fn replay_preserves_verified_native_key_sequence_and_legacy_foreign_history() {
+        let mut app=test_app();let seed=Seed::from_mnemonic(PHRASE).unwrap();
+        let key=seed.neuron("cyber.page","lytics").unwrap();
+        let first=signed_event(&seed,"/first",app.cfg.enroll_target);
+        ingest(&mut app,first,None,None).unwrap();
+        let second=signed_event(&seed,"/second",app.cfg.event_target);
+        ingest(&mut app,second,None,None).unwrap();
+        let before:Vec<_>=app.graph.chains[&key.native].entries.values().map(|s|s.hash()).collect();
+        let mut old=app.events[0].clone();old.provenance=None;
+        old.body.pathname="/historical".into();
+        old.event_hash=hex::encode(event_hash(&lytics_event::encode_body(&old.body)));
+        // Exact old JSON without the newly optional evidence field.
+        let bytes=serde_json::to_vec(&old).unwrap();assert!(!String::from_utf8_lossy(&bytes).contains("provenance"));
+        app.store.append(&old.body.neuron,&bytes).unwrap();
+        app.graph=Cybergraph::new();app.chains=graph::Chains::default();
+        app.events.clear();app.seen.clear();
+        replay(&mut app).unwrap();
+        assert_eq!(app.events.len(),3);assert_eq!(app.events.iter().filter(|e|e.provenance.is_none()).count(),1);
+        assert_eq!(app.graph.chains.len(),1);
+        assert_eq!(before,app.graph.chains[&key.native].entries.values().map(|s|s.hash()).collect::<Vec<_>>());
+        assert!(!app.graph.chains.contains_key(hemera::hash(key.bech32.as_bytes()).as_bytes()));
+        replay(&mut app).unwrap();assert_eq!(app.events.len(),3);
+        let third=signed_event(&seed,"/third",app.cfg.event_target);
+        ingest(&mut app,third,None,None).unwrap();
+        assert_eq!(app.graph.chains[&key.native].entries.len(),3);
+        assert_eq!(app.graph.chains[&key.native].entries[&2].prev,before[1]);
+    }
+
+    #[test]
+    fn changed_readable_history_fails_before_replacing_the_existing_projection() {
+        for tamper in 0..3 {
+            let mut app=test_app();let seed=Seed::from_mnemonic(PHRASE).unwrap();
+            let event=signed_event(&seed,"/first",app.cfg.enroll_target);
+            ingest(&mut app,event,None,None).unwrap();
+            let mut bad=app.events[0].clone();bad.body.pathname="/tampered".into();
+            if tamper!=0 {bad.event_hash=hex::encode(event_hash(&lytics_event::encode_body(&bad.body)));}
+            let frame=if tamper==2{"lytics1wrong"}else{bad.body.neuron.as_str()};
+            app.store.append(frame,&serde_json::to_vec(&bad).unwrap()).unwrap();
+            assert!(replay(&mut app).is_err());
+            assert_eq!(app.events.len(),1);assert_eq!(app.graph.chains.len(),1);
+        }
     }
 }

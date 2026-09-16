@@ -1245,6 +1245,7 @@ mod tests {
         agent_name: Option<&str>,
     ) -> Stored {
         Stored {
+            provenance: None,
             body: EventBody {
                 neuron: neuron.into(),
                 actor,

@@ -29,6 +29,8 @@ use std::collections::BTreeSet;
 /// a stored, enriched event — payload-log plaintext.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stored {
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub provenance: Option<crate::provenance::Origin>,
     pub body: EventBody,
     pub event_hash: String,
     pub attribution: Attribution,
@@ -833,6 +835,7 @@ mod tests {
 
     fn ev(neuron: &str, path: &str, ts: u64, nav: Option<Navigation>, att: u64) -> Stored {
         Stored {
+            provenance: None,
             body: EventBody {
                 neuron: neuron.into(),
                 actor: Actor::Human,

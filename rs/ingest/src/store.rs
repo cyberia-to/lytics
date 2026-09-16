@@ -8,7 +8,7 @@
 //! frames: `[u32 le frame_len][u16 le neuron_len][neuron bech32][12 B nonce][ciphertext]`.
 //! each neuron's payloads are encrypted with a per-neuron data key held in
 //! `keys/<bech32>`; destroying the key file shreds every past frame. the log
-//! is the source of truth — the in-memory index and the cell are replayed
+//! is the source of truth — the in-memory index and the graph are replayed
 //! from it at startup, skipping unreadable (shredded) frames.
 
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
