@@ -11,6 +11,12 @@ the canonical specification and build plan. the product story lives in
 [../README.md](../README.md). when this document and code disagree, this
 document is fixed first, then the code.
 
+## Domain identity migration
+
+[Neuron history](neuron-history.md) defines unchanged domain/ADR-036 identity,
+retained replay evidence and explicit legacy provenance. A native graph projection
+is not a signing runtime subject; report table cells retain their ordinary meaning.
+
 ## architecture
 
 ```text
@@ -20,7 +26,7 @@ visitor browser                     server                       reader
 │  capture + queue│           │  verify sig+pow  │        │ leptos/trunk │
 │ core.wasm ~26KB │           │  ua · geo · ref  │  ───►  │  d3 widgets  │
 │  keys·sign·pow  │           │  cast signal     │        └──────────────┘
-└─────────────────┘           │ cell (cybergraph)│              ▲
+└─────────────────┘           │ graph (cybergraph)│              ▲
                               │  bbg state·time  │              │
                               │ query (inf)      │──────────────┘
                               └──────────────────┘   HTTP /api/report/*
@@ -30,8 +36,8 @@ visitor browser                     server                       reader
 |---|---|---|
 | loader | JS module, ~2 KB source | fires on page load, captures pageview + SPA route changes instantly, runs the attention sensor, queues events until the core is ready |
 | core | Rust → wasm, ~31 KB gzip / ~26 KB brotli measured | keygen, per-domain derivation, secp256k1 signing, PoW; loaded async so page performance never waits on crypto |
-| ingest | Rust, axum | signature + PoW verification, replay dedup, UA parsing, MaxMind geo (ip read, used, discarded), referrer→source attribution, adaptive difficulty, signal casting into the cell |
-| store | in-process event log, cast towards [[cybergraph]] cell + [[bbg]] | events enter signed and hash-addressed; the cell/bbg wiring for provable state is phase 6 — reports today read the ingest process's own log |
+| ingest | Rust, axum | signature + PoW verification, replay dedup, UA parsing, MaxMind geo (ip read, used, discarded), referrer→source attribution, adaptive difficulty, signal casting into the graph |
+| store | in-process event log, cast towards [[cybergraph]] index + [[bbg]] | events enter signed and hash-addressed; the graph/bbg wiring for provable state is phase 6 — reports today read the ingest process's own log |
 | query | [[inf]] native (`inf-parse/plan/eval`) over a `LocalSource` built from the log | every report — including sources, channels, passages and funnels, which group by *passage* — is a real inf rule; no report answers from a Rust loop over the event stream in the release binary |
 | dashboard | static HTML + vanilla JS (`static/dash.html`) | polls the report endpoints, no build step; the Leptos/Trunk/d3 skeleton below was never built |
 
@@ -213,7 +219,7 @@ networks.
 
 ### erasure
 
-the cell is append-only, and erasure still must be real. event payloads
+the graph history is append-only, and erasure still must be real. event payloads
 are encrypted at rest with a per-neuron data key held by the site;
 `DELETE /api/neuron` destroys the key. the graph keeps its hashes, the
 data becomes unreadable, already-published aggregates stay — the standard
@@ -285,7 +291,7 @@ lytics/
 ├── specs/         this document — canonical
 └── rs/            cargo workspace
     ├── event/     shared crypto spine — canonical encoding, hash, pow, keys, adr-036
-    ├── ingest/    axum service embedding the cell + reports + static dashboard
+    ├── ingest/    axum service embedding the graph + reports + static dashboard
     │   └── static/dash.html    the symbolic dashboard
     ├── agent/     reference agent client + load generator
     └── core/      wasm tracker core (phase: tracker) + loader.js
@@ -306,14 +312,14 @@ queue-until-ready. size gate in CI: core ≤64 KB gzip, loader ≤2 KB.
 
 ### phase 2 — ingest (3 sessions)
 
-axum service embedding a cybergraph cell: `POST /api/event` — verify
+axum service embedding a cybergraph index: `POST /api/event` — verify
 signature, verify PoW, parse UA, geo lookup, referrer→source→channel
 attribution (Rust port of plausible behavior over the snowplow referer
 database, with assistant referrals as a first-class channel), cast the
-event as a signed signal into the cell. difficulty oracle endpoint.
+event as a local graph observation retaining the original signing evidence. difficulty oracle endpoint.
 erasure endpoint (per-neuron data-key destruction). `agent/`: a reference
 Rust client (canonical encoding + PoW + ADR-036) proving the API needs no
-browser. acceptance gate: sustain 100 events/s on one core with the cell
+browser. acceptance gate: sustain 100 events/s on one core with the graph
 embedded.
 
 ### phase 3 — queries: the full report set (4 sessions) — done
@@ -359,8 +365,8 @@ that number — they are the point, never an add-on.
 
 ### phase 6 — the network and the proofs (blocked, by design)
 
-events live in the cell from phase 2, so settlement needs no replay. what
-remains is the stack tail: cells syncing over the real transport
+events live in the graph projection from phase 2, so settlement needs no replay. what
+remains is the stack tail: graph instances syncing over the real transport
 (radio/iroh, unwired today), bbg QueryProof serde and the query wire
 protocol for provable reads, and [[zheng]] proving the aggregates — "this
 page truly had N visitors" verified by anyone. these wait on the stack's

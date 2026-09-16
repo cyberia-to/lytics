@@ -159,7 +159,7 @@ never by how long it paused. formal model: [specs/](specs/README.md).
   lie. lytics prices the signal: spam pays in compute, honesty earns an
   audience.
 - clickhouse. the store is the cybergraph itself — bbg state in an
-  embedded cell, read by inf; a columnar engine remains a swap-in.
+  embedded graph, read by inf; a columnar engine remains a swap-in.
 - the SaaS scaffolding. billing, quotas, roles, importers — 70% of
   plausible serves their cloud. lytics ships the engine.
 
