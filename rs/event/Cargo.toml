@@ -26,12 +26,12 @@ serde_json = { workspace = true, optional = true }
 thiserror.workspace = true
 k256.workspace = true
 # domain-scoped identity + ADR-036 sign/verify — mudra's the canonical owner
-# of these conventions cyber-wide (see mudra/.claude/plans/lytics-domain-identity.md
+# of these conventions cyber-wide (see neuron/.claude/plans/lytics-domain-identity.md
 # for why this used to be reimplemented here). `default-features = false`
 # drops mudra's `bridge` feature (bip32/bip39, the legacy-key-recovery path)
 # — lytics has no legacy account to recover, and the wasm tracker can't
 # afford bip32's HMAC-SHA512 ladder regardless.
-mudra = { package = "cyber-mudra", path = "../../../mudra", default-features = false }
+neuron-auth = { path = "../../../neuron/auth", default-features = false }
 bip39 = { workspace = true, optional = true }
 getrandom.workspace = true
 

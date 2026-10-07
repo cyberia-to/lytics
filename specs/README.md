@@ -280,7 +280,7 @@ visitor.
 | referrer→source engine | plausible core (AGPL) + snowplow referer db | clean reimplementation in Rust; behavior parity, fresh code |
 | geo | `maxminddb` crate + GeoLite2 | same lookup plausible uses |
 | ua parsing | `uaparser`/`woothee` crate | device class, browser, os |
-| identity pipeline | [[mudra]] bridge (`mudra/specs/bridge.md`) | entropy → Hemera KDF → secp256k1 → bech32, neuron = Hemera(pubkey), ADR-036 signing — the existing bridge claim carries a lytics neuron into the native graph |
+| identity pipeline | [[neuron]] bridge (`neuron/specs/bridge.md`, crate `neuron-auth`; formerly mudra) | entropy → Hemera KDF → secp256k1 → bech32, neuron = Hemera(pubkey), ADR-036 signing — the existing bridge claim carries a lytics neuron into the native graph |
 | pow + hashing | [[hemera]] Poseidon2 | event hash and PoW share the stack's native hash — a lytics event hash is already a particle hash |
 
 ## repo layout

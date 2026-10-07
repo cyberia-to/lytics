@@ -471,19 +471,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cyber-mudra"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bech32",
- "cyber-hemera",
- "k256",
- "neuron-id",
- "ripemd",
- "sha2",
-]
-
-[[package]]
 name = "cyber-nox"
 version = "0.3.0"
 dependencies = [
@@ -1144,10 +1131,10 @@ dependencies = [
  "base64",
  "bip39",
  "cyber-hemera",
- "cyber-mudra",
  "getrandom 0.2.17",
  "hex",
  "k256",
+ "neuron-auth",
  "serde",
  "serde_json",
  "thiserror",
@@ -1247,6 +1234,19 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "neuron-auth"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bech32",
+ "cyber-hemera",
+ "k256",
+ "neuron-id",
+ "ripemd",
+ "sha2",
 ]
 
 [[package]]
