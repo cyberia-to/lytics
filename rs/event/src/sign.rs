@@ -7,7 +7,7 @@
 //!
 //! the signed document is the Cosmos offline StdSignDoc wrapping the
 //! canonical body bytes as `sign/MsgSignData`. the doc shape, and the
-//! sign/verify over it, are `mudra::claim::sign_arbitrary`/`verify_arbitrary`
+//! sign/verify over it, are `neuron_auth::claim::sign_arbitrary`/`verify_arbitrary`
 //! now — this module is the lytics-specific wire format (base64 in/out,
 //! `SignError`) around that shared primitive.
 
@@ -36,7 +36,7 @@ pub fn sign_body(
     body_bytes: &[u8],
     signer_bech32: &str,
 ) -> (String, String) {
-    let sig = mudra::claim::sign_arbitrary(key, signer_bech32, body_bytes);
+    let sig = neuron_auth::claim::sign_arbitrary(key, signer_bech32, body_bytes);
     let pubkey = key.verifying_key().to_encoded_point(true);
     (crate::b64::encode(pubkey.as_bytes()), crate::b64::encode(&sig))
 }
@@ -58,14 +58,14 @@ pub fn verify(
 pub fn verify_native(
     body_bytes:&[u8], neuron_bech32:&str, pubkey_b64:&str,
     signature_b64:&str, hrp:&str,
-) -> Result<mudra::NeuronId,SignError> {
+) -> Result<neuron_auth::NeuronId,SignError> {
     let pubkey_bytes =
         crate::b64::decode(pubkey_b64).ok_or_else(|| SignError::Base64("pubkey".into()))?;
     let pubkey: [u8; 33] = pubkey_bytes
         .as_slice()
         .try_into()
         .map_err(|_| SignError::Pubkey("expected 33 bytes".into()))?;
-    if mudra::cosmos::address(&pubkey, hrp).map_err(|e| SignError::Pubkey(e.to_string()))?
+    if neuron_auth::cosmos::address(&pubkey, hrp).map_err(|e| SignError::Pubkey(e.to_string()))?
         != neuron_bech32
     {
         return Err(SignError::SignerMismatch);
@@ -74,8 +74,8 @@ pub fn verify_native(
         crate::b64::decode(signature_b64).ok_or_else(|| SignError::Base64("signature".into()))?;
     let signature: [u8; 64] =
         sig_bytes.as_slice().try_into().map_err(|_| SignError::Invalid)?;
-    if mudra::claim::verify_arbitrary(&pubkey, neuron_bech32, body_bytes, &signature) {
-        Ok(mudra::claim::neuron_of(&pubkey))
+    if neuron_auth::claim::verify_arbitrary(&pubkey, neuron_bech32, body_bytes, &signature) {
+        Ok(neuron_auth::claim::neuron_of(&pubkey))
     } else {
         Err(SignError::Invalid)
     }

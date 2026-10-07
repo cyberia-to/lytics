@@ -15,8 +15,8 @@
 //! `mnemonic` feature. spec: lytics/specs/README.md, identity pipeline.
 //!
 //! the derivation, bech32 encoding and native-id formula live in
-//! `mudra::domain` now — mudra is the canonical owner of these conventions
-//! cyber-wide (see `mudra/.claude/plans/lytics-domain-identity.md`). this
+//! `neuron_auth::domain` now — mudra is the canonical owner of these conventions
+//! cyber-wide (see `neuron/.claude/plans/lytics-domain-identity.md`). this
 //! module is what's actually lytics-specific: the mnemonic import/export
 //! convenience (a display concern, not identity) and the `Seed`/`Neuron`
 //! names this crate's callers already use.
@@ -31,8 +31,8 @@ pub enum KeyError {
     Entropy(String),
 }
 
-impl From<mudra::Error> for KeyError {
-    fn from(e: mudra::Error) -> Self {
+impl From<neuron_auth::Error> for KeyError {
+    fn from(e: neuron_auth::Error) -> Self {
         KeyError::Derivation(e.to_string())
     }
 }
@@ -51,13 +51,13 @@ impl std::fmt::Debug for Seed {
 
 /// a per-domain neuron: the derived key and its wire identities.
 pub struct Neuron {
-    key: mudra::domain::DomainKey,
+    key: neuron_auth::domain::DomainKey,
     /// SEC1-compressed pubkey, 33 bytes
     pub pubkey: [u8; 33],
     /// bech32 wire form
     pub bech32: String,
     /// native id — Hemera(compressed pubkey)
-    pub native: mudra::NeuronId,
+    pub native: neuron_auth::NeuronId,
 }
 
 impl std::fmt::Debug for Neuron {
@@ -107,7 +107,7 @@ impl Seed {
 
     /// derive the neuron a given domain observes.
     pub fn neuron(&self, domain: &str, hrp: &str) -> Result<Neuron, KeyError> {
-        let key = mudra::domain::DomainKey::derive(&self.entropy, domain, hrp)?;
+        let key = neuron_auth::domain::DomainKey::derive(&self.entropy, domain, hrp)?;
         let pubkey = key.pubkey;
         let bech32 = key.bech32.clone();
         let native = key.native;
