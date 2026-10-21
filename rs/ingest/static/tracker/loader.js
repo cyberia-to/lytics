@@ -291,7 +291,14 @@ hookHistory();
 // ── the core: a worker when the browser has module workers, inline otherwise ─
 // both expose { neuron, build_event(args, target) → Promise<json> }.
 async function workerCore(entropy) {
-  const w = new Worker(new URL("./core-worker.js", import.meta.url), { type: "module" });
+  // a worker script must be same-origin with the page, and this loader is
+  // usually not (lytics.cyb.ai on cyb.money, soft3.org, …). a blob URL is
+  // same-origin by construction; the module inside imports the real worker
+  // cross-origin, which the tracker's CORS headers allow.
+  const workerUrl = new URL("./core-worker.js", import.meta.url).href;
+  const blob = new Blob([`import ${JSON.stringify(workerUrl)};`], { type: "text/javascript" });
+  const blobUrl = URL.createObjectURL(blob);
+  const w = new Worker(blobUrl, { type: "module" });
   const pending = new Map();
   let seq = 0;
   const readyNeuron = new Promise((resolve, reject) => {
