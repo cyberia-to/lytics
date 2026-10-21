@@ -8,7 +8,10 @@
 // (keys, signing, pow) lives in the wasm core; this file only observes and
 // ships. spec: lytics/specs/README.md, the attention model.
 
-import init, { Tracker, generate_entropy } from "./lytics_core.js";
+// the wasm core runs in a module worker (core-worker.js): signing and proof
+// of work never block the page. the main thread keeps only what needs the
+// DOM and localStorage; it never imports the wasm itself unless the browser
+// has no module workers, in which case the core runs inline (the old path).
 
 // type=module scripts have document.currentScript === null — resolve our tag.
 const script =
@@ -44,6 +47,7 @@ const IDLE_MS = 5000; // input silence pauses the attention clock
 
 const KEY = `lytics:entropy:${IDENTITY_DOMAIN}`;
 let tracker, eventTarget, enrollTarget, ready;
+let neuron = ""; // the core's neuron id, from the worker or the inline core
 const queue = []; // events captured before the core is live
 
 // ── identity: 32-byte entropy lives in localStorage, per identity domain ────
@@ -64,13 +68,11 @@ function adoptIncomingIdentity() {
   url.searchParams.delete(LINK_PARAM);
   history.replaceState(history.state, "", url.pathname + url.search + url.hash);
 }
-function loadOrCreateEntropy() {
-  let e = localStorage.getItem(KEY);
-  if (!e) {
-    e = generate_entropy(); // hex, no wordlist touched
-    localStorage.setItem(KEY, e);
-  }
-  return e;
+function storedEntropy() {
+  return localStorage.getItem(KEY) || null; // null → the core generates one
+}
+function rememberEntropy(e) {
+  if (e && e !== localStorage.getItem(KEY)) localStorage.setItem(KEY, e);
 }
 // decorate outbound links to sibling sites with this visitor's entropy so
 // the landing page can adopt it via adoptIncomingIdentity above — the only
@@ -119,7 +121,6 @@ window.lytics.forget = () => {
 
 // ── transport ───────────────────────────────────────────────────────────────
 async function difficulty() {
-  const neuron = tracker.neuron;
   const r = await fetch(`${ENDPOINT}/api/difficulty?neuron=${neuron}`);
   const d = await r.json();
   eventTarget = BigInt(d.event_target);
@@ -134,17 +135,19 @@ async function send(spec) {
   const target = currentTarget();
   // wasm signs + pow's from explicit args and returns the ready-to-POST JSON
   // (no JSON parse in the wasm; nothing to stringify here)
-  const json = tracker.build_event(
-    spec.kind,
-    HOSTNAME,
-    spec.pathname,
-    spec.navigation ?? undefined,
-    spec.referrer ?? undefined,
-    spec.attention_ms ?? undefined,
-    spec.scroll_depth ?? undefined,
-    spec.agent_name ?? undefined,
-    spec.agent_operator ?? undefined,
-    spec.timestamp,
+  const json = await tracker.build_event(
+    [
+      spec.kind,
+      HOSTNAME,
+      spec.pathname,
+      spec.navigation ?? undefined,
+      spec.referrer ?? undefined,
+      spec.attention_ms ?? undefined,
+      spec.scroll_depth ?? undefined,
+      spec.agent_name ?? undefined,
+      spec.agent_operator ?? undefined,
+      spec.timestamp,
+    ],
     target,
   );
   const r = await fetch(`${ENDPOINT}/api/event`, {
@@ -285,12 +288,74 @@ decorateOutboundLinks();
 // capture the first pageview immediately, then bring the core up
 pageview();
 hookHistory();
-(async () => {
+// ── the core: a worker when the browser has module workers, inline otherwise ─
+// both expose { neuron, build_event(args, target) → Promise<json> }.
+async function workerCore(entropy) {
+  const w = new Worker(new URL("./core-worker.js", import.meta.url), { type: "module" });
+  const pending = new Map();
+  let seq = 0;
+  const readyNeuron = new Promise((resolve, reject) => {
+    pending.set(0, { resolve, reject });
+  });
+  w.onmessage = (ev) => {
+    const m = ev.data || {};
+    if (m.type === "ready") {
+      rememberEntropy(m.entropy);
+      pending.get(0)?.resolve(m.neuron);
+      pending.delete(0);
+    } else if (m.type === "built" || m.type === "error") {
+      const p = pending.get(m.id);
+      if (!p) return;
+      pending.delete(m.id);
+      m.type === "built" ? p.resolve(m.json) : p.reject(new Error(m.message));
+    }
+  };
+  w.onerror = (e) => {
+    const err = new Error("lytics core worker: " + (e.message || "failed"));
+    for (const p of pending.values()) p.reject(err);
+    pending.clear();
+  };
+  w.postMessage({ type: "init", entropy, identityDomain: IDENTITY_DOMAIN, hrp: HRP });
+  const n = await readyNeuron;
+  return {
+    neuron: n,
+    build_event(args, target) {
+      const id = ++seq;
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        w.postMessage({ type: "build", id, args, target });
+      });
+    },
+  };
+}
+async function inlineCore(entropy) {
+  const { default: init, Tracker, generate_entropy } = await import("./lytics_core.js");
   await init();
-  tracker = new Tracker(loadOrCreateEntropy(), IDENTITY_DOMAIN, HRP);
+  if (!entropy) entropy = generate_entropy(); // hex, no wordlist touched
+  rememberEntropy(entropy);
+  const t = new Tracker(entropy, IDENTITY_DOMAIN, HRP);
+  return {
+    neuron: t.neuron,
+    build_event: async (args, target) => t.build_event(...args, target),
+  };
+}
+async function bringUpCore(entropy) {
+  if (typeof Worker === "function") {
+    try {
+      return await workerCore(entropy);
+    } catch (e) {
+      console.warn("lytics: core worker unavailable, running inline:", e);
+    }
+  }
+  return inlineCore(entropy);
+}
+
+(async () => {
+  tracker = await bringUpCore(storedEntropy());
+  neuron = tracker.neuron;
   enrolled = await difficulty();
   ready = true;
-  window.lytics.neuron = tracker.neuron;
+  window.lytics.neuron = neuron;
   while (queue.length) {
     const fn = queue.shift();
     await fn();

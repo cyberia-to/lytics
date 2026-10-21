@@ -460,6 +460,7 @@ async fn tracker_asset(Path(name): Path<String>) -> impl IntoResponse {
     };
     const ALLOWED: &[&str] = &[
         "loader.js",
+        "core-worker.js",
         "lytics_core.js",
         "lytics_core_bg.wasm",
         "words.js",
